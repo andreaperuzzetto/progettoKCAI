@@ -1,5 +1,11 @@
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+
+from backend.db.database import engine
+from backend.db.models import Base
+from backend.config import settings
 
 from backend.api.health import router as health_router
 from backend.api.sales import router as sales_router
@@ -8,9 +14,18 @@ from backend.api.forecast import router as forecast_router
 from backend.api.review_analysis import router as review_analysis_router
 from backend.api.correlation import router as correlation_router
 from backend.api.daily_report import router as daily_report_router
-from backend.config import settings
 
-app = FastAPI(title=settings.app_name)
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    Base.metadata.create_all(bind=engine)
+    yield
+
+
+app = FastAPI(
+    title=settings.app_name,
+    lifespan=lifespan
+)
 
 app.add_middleware(
     CORSMiddleware,
