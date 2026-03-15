@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3:*)",
+      "Read(//opt/homebrew/bin/**)",
+      "Bash(brew list:*)",
+      "Bash(rm:*)",
+      "Bash(source:*)",
+      "Bash(which node:*)",
+      "Bash(npx:*)",
+      "Bash(cd:*)"
+    ]
+  }
+}
