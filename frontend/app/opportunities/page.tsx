@@ -2,8 +2,7 @@
 
 import { useState } from "react";
 import { fetchCorrelation } from "../lib/api";
-
-const DEMO_RESTAURANT_ID = "00000000-0000-0000-0000-000000000001";
+import { useAuth } from "../lib/auth-context";
 
 interface Hypothesis {
   problem: string;
@@ -13,21 +12,32 @@ interface Hypothesis {
 }
 
 export default function OpportunitiesPage() {
+  const { activeRestaurant } = useAuth();
   const [data, setData] = useState<{ hypotheses: Hypothesis[] } | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
   async function handleLoad() {
+    if (!activeRestaurant) return;
     setLoading(true);
     setError("");
     try {
-      const result = await fetchCorrelation(DEMO_RESTAURANT_ID);
+      const result = await fetchCorrelation(activeRestaurant.id);
       setData(result);
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Failed to load");
     } finally {
       setLoading(false);
     }
+  }
+
+  if (!activeRestaurant) {
+    return (
+      <div>
+        <h1 className="text-2xl font-bold mb-6">Opportunities</h1>
+        <p className="text-gray-500">No restaurant selected.</p>
+      </div>
+    );
   }
 
   return (

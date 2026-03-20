@@ -7,6 +7,7 @@ from backend.db.database import engine
 from backend.db.models import Base
 from backend.config import settings
 
+from backend.api.auth import router as auth_router
 from backend.api.health import router as health_router
 from backend.api.sales import router as sales_router
 from backend.api.reviews import router as reviews_router
@@ -34,6 +35,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(auth_router)
 app.include_router(health_router)
 app.include_router(sales_router)
 app.include_router(reviews_router)

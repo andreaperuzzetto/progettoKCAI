@@ -11,11 +11,21 @@ PK_UUID = Uuid(as_uuid=True, native_uuid=False)
 FK_UUID = Uuid(as_uuid=True, native_uuid=False)
 
 
+class User(Base):
+    __tablename__ = "users"
+
+    id: Mapped[uuid.UUID] = mapped_column(PK_UUID, default=uuid.uuid4, primary_key=True)
+    email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
+    password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
 class Restaurant(Base):
     __tablename__ = "restaurants"
 
     id: Mapped[uuid.UUID] = mapped_column(PK_UUID, default=uuid.uuid4, primary_key=True)
     name: Mapped[str] = mapped_column(String(255))
+    owner_user_id: Mapped[uuid.UUID] = mapped_column(FK_UUID, ForeignKey("users.id"), nullable=False)
     location: Mapped[str] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 

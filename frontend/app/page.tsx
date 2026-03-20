@@ -2,21 +2,22 @@
 
 import { useState } from "react";
 import { fetchDailyReport, uploadSales, uploadReviews } from "./lib/api";
-
-const DEMO_RESTAURANT_ID = "00000000-0000-0000-0000-000000000001";
+import { useAuth } from "./lib/auth-context";
 
 export default function TodayPage() {
+  const { activeRestaurant } = useAuth();
   const [report, setReport] = useState<Record<string, unknown> | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [uploadMsg, setUploadMsg] = useState("");
 
   async function handleGenerateReport() {
+    if (!activeRestaurant) return;
     setLoading(true);
     setError("");
     try {
       const today = new Date().toISOString().split("T")[0];
-      const data = await fetchDailyReport(DEMO_RESTAURANT_ID, today);
+      const data = await fetchDailyReport(activeRestaurant.id, today);
       setReport(data);
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Failed to generate report");
@@ -29,12 +30,13 @@ export default function TodayPage() {
     type: "sales" | "reviews",
     e: React.ChangeEvent<HTMLInputElement>
   ) {
+    if (!activeRestaurant) return;
     const file = e.target.files?.[0];
     if (!file) return;
     setUploadMsg("");
     try {
       const fn = type === "sales" ? uploadSales : uploadReviews;
-      const result = await fn(DEMO_RESTAURANT_ID, file);
+      const result = await fn(activeRestaurant.id, file);
       setUploadMsg(`${type}: ${result.rows_imported} rows imported.`);
     } catch {
       setUploadMsg(`Failed to upload ${type}.`);
@@ -43,6 +45,17 @@ export default function TodayPage() {
   }
 
   const forecast = report?.forecast as Record<string, number> | undefined;
+
+  if (!activeRestaurant) {
+    return (
+      <div>
+        <h1 className="text-2xl font-bold mb-6">Today</h1>
+        <p className="text-gray-500">
+          No restaurant found. Use the &quot;+ Restaurant&quot; button in the navigation to create one.
+        </p>
+      </div>
+    );
+  }
 
   return (
     <div>

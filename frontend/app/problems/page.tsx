@@ -2,19 +2,20 @@
 
 import { useState } from "react";
 import { fetchReviewAnalysis } from "../lib/api";
-
-const DEMO_RESTAURANT_ID = "00000000-0000-0000-0000-000000000001";
+import { useAuth } from "../lib/auth-context";
 
 export default function ProblemsPage() {
+  const { activeRestaurant } = useAuth();
   const [data, setData] = useState<Record<string, unknown> | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
   async function handleLoad() {
+    if (!activeRestaurant) return;
     setLoading(true);
     setError("");
     try {
-      const result = await fetchReviewAnalysis(DEMO_RESTAURANT_ID);
+      const result = await fetchReviewAnalysis(activeRestaurant.id);
       setData(result);
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Failed to load");
@@ -25,6 +26,15 @@ export default function ProblemsPage() {
 
   const sentiments = data?.sentiments as Record<string, number> | undefined;
   const topics = data?.topics as Record<string, number> | undefined;
+
+  if (!activeRestaurant) {
+    return (
+      <div>
+        <h1 className="text-2xl font-bold mb-6">Problems</h1>
+        <p className="text-gray-500">No restaurant selected.</p>
+      </div>
+    );
+  }
 
   return (
     <div>

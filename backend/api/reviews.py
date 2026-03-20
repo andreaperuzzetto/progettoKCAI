@@ -3,7 +3,9 @@ import uuid
 from fastapi import APIRouter, Depends, File, Query, UploadFile
 from sqlalchemy.orm import Session
 
+from backend.auth.dependencies import get_owned_restaurant
 from backend.db.database import get_db
+from backend.db.models import Restaurant
 from backend.services.reviews_service import parse_csv, validate_json_reviews, store_reviews
 
 router = APIRouter()
@@ -13,6 +15,7 @@ router = APIRouter()
 async def upload_reviews_csv(
     file: UploadFile = File(...),
     restaurant_id: uuid.UUID = Query(...),
+    restaurant: Restaurant = Depends(get_owned_restaurant),
     db: Session = Depends(get_db),
 ):
     raw = await file.read()
@@ -26,6 +29,7 @@ async def upload_reviews_csv(
 def upload_reviews_json(
     reviews: list[dict],
     restaurant_id: uuid.UUID = Query(...),
+    restaurant: Restaurant = Depends(get_owned_restaurant),
     db: Session = Depends(get_db),
 ):
     rows = validate_json_reviews(reviews)

@@ -6,7 +6,8 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from backend.db.database import Base, get_db
-from backend.db.models import Restaurant
+from backend.db.models import Restaurant, User
+from backend.auth.utils import hash_password, create_access_token
 from backend.main import app
 
 
@@ -46,10 +47,30 @@ def client(db_session):
 
 
 @pytest.fixture()
-def restaurant(db_session):
-    """Create a test restaurant and return its UUID."""
+def user(db_session):
+    """Create a test user and return it."""
+    u = User(
+        email="test@example.com",
+        password_hash=hash_password("testpassword"),
+    )
+    db_session.add(u)
+    db_session.commit()
+    db_session.refresh(u)
+    return u
+
+
+@pytest.fixture()
+def restaurant(db_session, user):
+    """Create a test restaurant owned by the test user and return its UUID."""
     rid = uuid.uuid4()
-    r = Restaurant(id=rid, name="Test Restaurant", location="Test City")
+    r = Restaurant(id=rid, name="Test Restaurant", owner_user_id=user.id)
     db_session.add(r)
     db_session.commit()
     return rid
+
+
+@pytest.fixture()
+def auth_headers(user):
+    """Return Authorization headers for the test user."""
+    token = create_access_token({"sub": str(user.id)})
+    return {"Authorization": f"Bearer {token}"}
