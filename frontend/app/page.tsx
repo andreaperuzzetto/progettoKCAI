@@ -1,350 +1,506 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useAuth } from "./lib/auth-context";
 import {
-  uploadReviewsCsv,
-  uploadReviewsText,
-  runAnalysis,
-  fetchLatestAnalysis,
-  type AnalysisData,
+  uploadReviewsCsv, uploadReviewsText, runAnalysis, fetchLatestAnalysis,
+  uploadSalesCsv, generateForecast, fetchDailyReport,
+  type AnalysisData, type DailyReport, type Suggestion, type AnalysisSuggestion,
 } from "./lib/api";
+import Link from "next/link";
+
+// ── Priority badge ─────────────────────────────────────────────────────────────
+function PriorityBadge({ priority }: { priority: string }) {
+  const cls =
+    priority === "high" ? "bg-red-100 text-red-700" :
+    priority === "medium" ? "bg-amber-100 text-amber-700" :
+    "bg-green-100 text-green-700";
+  const label = priority === "high" ? "Alta" : priority === "medium" ? "Media" : "Bassa";
+  return <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${cls}`}>{label}</span>;
+}
+
+// ── Suggestion card ────────────────────────────────────────────────────────────
+function SuggestionCard({ s }: { s: Suggestion }) {
+  const icon =
+    s.type === "staffing" ? "👥" :
+    s.type === "inventory" ? "🛒" :
+    s.type === "kitchen" ? "🍳" :
+    s.type === "menu" ? "📋" :
+    s.type === "operations" ? "🧹" :
+    "💡";
+  return (
+    <div className="flex items-start gap-3 p-3 bg-white border border-gray-200 rounded-xl">
+      <span className="text-xl shrink-0 mt-0.5">{icon}</span>
+      <div className="flex-1 min-w-0">
+        <p className="text-sm text-gray-800 leading-relaxed">{s.message}</p>
+      </div>
+      <PriorityBadge priority={s.priority} />
+    </div>
+  );
+}
+
+// ── Stat card ──────────────────────────────────────────────────────────────────
+function StatCard({ label, value, sub }: { label: string; value: string | number; sub?: string }) {
+  return (
+    <div className="bg-white border border-gray-200 rounded-xl p-4 text-center">
+      <p className="text-2xl font-bold text-gray-900">{value}</p>
+      <p className="text-sm text-gray-500 mt-0.5">{label}</p>
+      {sub && <p className="text-xs text-gray-400 mt-1">{sub}</p>}
+    </div>
+  );
+}
 
 export default function DashboardPage() {
-  const { activeRestaurant, user } = useAuth();
+  const { user, activeRestaurant } = useAuth();
+  const [tab, setTab] = useState<"oggi" | "recensioni" | "dati">("oggi");
+
+  // Daily report state
+  const [report, setReport] = useState<DailyReport | null>(null);
+  const [reportLoading, setReportLoading] = useState(false);
+  const [reportError, setReportError] = useState("");
+
+  // Analysis state
   const [analysis, setAnalysis] = useState<AnalysisData | null>(null);
-  const [running, setRunning] = useState(false);
-  const [uploading, setUploading] = useState(false);
-  const [uploadMsg, setUploadMsg] = useState<{ type: "ok" | "err"; text: string } | null>(null);
-  const [error, setError] = useState("");
-  const [period, setPeriod] = useState("all");
-  const [pasteMode, setPasteMode] = useState(false);
-  const [pasteText, setPasteText] = useState("");
+  const [analysisLoading, setAnalysisLoading] = useState(false);
+  const [analysisMsg, setAnalysisMsg] = useState("");
 
-  if (!activeRestaurant) {
-    return (
-      <EmptyState title="Nessun ristorante">
-        <p className="text-gray-500 mb-4">
-          Crea il tuo primo ristorante per iniziare.
-        </p>
-        <p className="text-sm text-gray-400">
-          Usa il pulsante &ldquo;+ Ristorante&rdquo; nella barra di navigazione.
-        </p>
-      </EmptyState>
-    );
-  }
+  // Upload states
+  const [uploadMsg, setUploadMsg] = useState("");
+  const [salesMsg, setSalesMsg] = useState("");
+  const [reviewText, setReviewText] = useState("");
 
-  async function handleCsvUpload(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (!file || !activeRestaurant) return;
-    setUploading(true);
-    setUploadMsg(null);
+  const rid = activeRestaurant?.id;
+
+  const loadReport = useCallback(async () => {
+    if (!rid) return;
+    setReportLoading(true);
+    setReportError("");
     try {
-      const r = await uploadReviewsCsv(activeRestaurant.id, file);
-      setUploadMsg({ type: "ok", text: `✓ ${r.rows_imported} recensioni importate` });
-    } catch (err: unknown) {
-      setUploadMsg({ type: "err", text: err instanceof Error ? err.message : "Errore upload" });
+      const r = await fetchDailyReport(rid);
+      setReport(r);
+    } catch {
+      setReportError("Previsione non disponibile. Carica dati di vendita e genera la previsione.");
     } finally {
-      setUploading(false);
-      e.target.value = "";
+      setReportLoading(false);
+    }
+  }, [rid]);
+
+  const loadAnalysis = useCallback(async () => {
+    if (!rid) return;
+    try {
+      const r = await fetchLatestAnalysis(rid);
+      setAnalysis(r ?? null);
+    } catch {}
+  }, [rid]);
+
+  useEffect(() => {
+    if (rid) {
+      loadReport();
+      loadAnalysis();
+    }
+  }, [rid, loadReport, loadAnalysis]);
+
+  // ── Handlers ──────────────────────────────────────────────────────────────────
+
+  async function handleReviewCsvUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file || !rid) return;
+    setUploadMsg("Caricamento…");
+    try {
+      const r = await uploadReviewsCsv(rid, file);
+      setUploadMsg(`✅ ${r.rows_imported} recensioni importate`);
+    } catch (err: unknown) {
+      setUploadMsg(`❌ ${err instanceof Error ? err.message : "Errore"}`);
     }
   }
 
-  async function handlePasteUpload() {
-    if (!activeRestaurant) return;
-    const lines = pasteText.split("\n").filter(Boolean);
-    if (!lines.length) return;
-    setUploading(true);
-    setUploadMsg(null);
+  async function handleReviewTextUpload() {
+    if (!rid || !reviewText.trim()) return;
+    const lines = reviewText.split("\n").map(l => l.trim()).filter(Boolean);
+    setUploadMsg("Caricamento…");
     try {
-      const r = await uploadReviewsText(activeRestaurant.id, lines);
-      setUploadMsg({ type: "ok", text: `✓ ${r.rows_imported} recensioni importate` });
-      setPasteText("");
-      setPasteMode(false);
+      const r = await uploadReviewsText(rid, lines);
+      setUploadMsg(`✅ ${r.rows_imported} recensioni importate`);
+      setReviewText("");
     } catch (err: unknown) {
-      setUploadMsg({ type: "err", text: err instanceof Error ? err.message : "Errore upload" });
-    } finally {
-      setUploading(false);
+      setUploadMsg(`❌ ${err instanceof Error ? err.message : "Errore"}`);
     }
   }
 
   async function handleRunAnalysis() {
-    if (!activeRestaurant) return;
-    setRunning(true);
-    setError("");
+    if (!rid) return;
+    setAnalysisLoading(true);
+    setAnalysisMsg("Analisi in corso…");
     try {
-      const result = await runAnalysis(activeRestaurant.id, period);
-      setAnalysis(result);
+      const r = await runAnalysis(rid, "all");
+      setAnalysis(r);
+      setAnalysisMsg("✅ Analisi completata");
+      loadReport(); // refresh report with new issues
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "Analisi fallita");
+      setAnalysisMsg(`❌ ${err instanceof Error ? err.message : "Errore"}`);
     } finally {
-      setRunning(false);
+      setAnalysisLoading(false);
     }
   }
 
-  async function handleLoadLatest() {
-    if (!activeRestaurant) return;
-    setRunning(true);
-    setError("");
+  async function handleSalesCsvUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file || !rid) return;
+    setSalesMsg("Caricamento…");
     try {
-      const result = await fetchLatestAnalysis(activeRestaurant.id);
-      if (result) setAnalysis(result);
-      else setError("Nessuna analisi trovata. Carica recensioni e avvia l'analisi.");
-    } catch {
-      setError("Errore nel caricamento.");
-    } finally {
-      setRunning(false);
+      const r = await uploadSalesCsv(rid, file);
+      setSalesMsg(`✅ ${r.inserted} vendite importate (${r.skipped} duplicate)`);
+    } catch (err: unknown) {
+      setSalesMsg(`❌ ${err instanceof Error ? err.message : "Errore"}`);
     }
+  }
+
+  async function handleGenerateForecast() {
+    if (!rid) return;
+    setSalesMsg("Generazione previsione…");
+    try {
+      const r = await generateForecast(rid);
+      setSalesMsg(`✅ Previsione generata per ${r.generated} giorni`);
+      loadReport();
+    } catch (err: unknown) {
+      setSalesMsg(`❌ ${err instanceof Error ? err.message : "Errore"}`);
+    }
+  }
+
+  // ── No restaurant selected ─────────────────────────────────────────────────
+  if (!rid) {
+    return (
+      <div className="text-center py-20">
+        <span className="text-5xl">��</span>
+        <h2 className="text-xl font-semibold mt-4 text-gray-800">Nessun ristorante selezionato</h2>
+        <p className="text-gray-500 mt-2 text-sm">Crea il tuo primo ristorante dal menu in alto.</p>
+      </div>
+    );
   }
 
   const isInactive = user?.subscription_status === "inactive";
 
-  return (
-    <div className="space-y-8">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900">{activeRestaurant.name}</h1>
-          <p className="text-sm text-gray-500 mt-0.5">Dashboard operativa AI</p>
+  // ── Tab: Oggi ──────────────────────────────────────────────────────────────
+  const TabOggi = () => (
+    <div className="space-y-6">
+      {/* Covers + top products */}
+      {reportLoading ? (
+        <div className="text-center py-12 text-gray-400">Caricamento…</div>
+      ) : reportError ? (
+        <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 text-sm text-amber-800">
+          {reportError}
+          <div className="mt-3 flex gap-2">
+            <button onClick={() => setTab("dati")} className="text-xs bg-amber-700 text-white px-3 py-1.5 rounded-lg hover:bg-amber-800 transition-colors">
+              Carica dati vendita →
+            </button>
+          </div>
         </div>
-        <SubscriptionBadge status={user?.subscription_status ?? "trial"} />
-      </div>
-
-      {/* Upload Section */}
-      <section className="bg-white border border-gray-200 rounded-xl p-6">
-        <h2 className="text-base font-semibold text-gray-900 mb-4">📥 Carica Recensioni</h2>
-        <div className="flex flex-wrap gap-3 mb-3">
-          <label className={`cursor-pointer inline-flex items-center gap-2 px-4 py-2 rounded-lg border text-sm font-medium transition-colors ${uploading ? "opacity-50 cursor-not-allowed" : "border-gray-300 hover:border-gray-900 hover:bg-gray-50"}`}>
-            <span>📄 CSV</span>
-            <input
-              type="file"
-              accept=".csv"
-              className="hidden"
-              disabled={uploading}
-              onChange={handleCsvUpload}
-            />
-          </label>
-          <button
-            onClick={() => setPasteMode(!pasteMode)}
-            className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-gray-300 text-sm font-medium hover:border-gray-900 hover:bg-gray-50 transition-colors"
-          >
-            ✏️ Testo libero
-          </button>
-        </div>
-
-        {pasteMode && (
-          <div className="mt-3">
-            <textarea
-              value={pasteText}
-              onChange={(e) => setPasteText(e.target.value)}
-              rows={5}
-              placeholder={"Una recensione per riga...\nOttimo cibo, servizio veloce.\nServizio lento ma piatti buoni."}
-              className="w-full border border-gray-300 rounded-lg p-3 text-sm resize-y focus:outline-none focus:ring-2 focus:ring-gray-900 font-mono"
-            />
-            <div className="flex gap-2 mt-2">
-              <button
-                onClick={handlePasteUpload}
-                disabled={uploading || !pasteText.trim()}
-                className="px-4 py-1.5 bg-gray-900 text-white text-sm rounded-lg disabled:opacity-50 hover:bg-gray-700"
-              >
-                {uploading ? "Caricamento..." : "Importa"}
-              </button>
-              <button onClick={() => setPasteMode(false)} className="px-4 py-1.5 text-sm text-gray-600 hover:text-gray-900">
-                Annulla
-              </button>
+      ) : report ? (
+        <>
+          {/* Tomorrow stats */}
+          <div>
+            <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-3">
+              📅 Domani — {report.tomorrow.date}
+            </h2>
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+              <StatCard
+                label="Coperti attesi"
+                value={report.tomorrow.expected_covers}
+                sub="previsione AI"
+              />
+              {report.tomorrow.top_products.slice(0, 2).map(p => (
+                <StatCard
+                  key={p.name}
+                  label={p.name}
+                  value={`~${p.predicted_qty}`}
+                  sub="pezzi previsti"
+                />
+              ))}
             </div>
           </div>
-        )}
 
-        {uploadMsg && (
-          <p className={`mt-3 text-sm px-3 py-2 rounded-lg ${uploadMsg.type === "ok" ? "bg-green-50 text-green-700" : "bg-red-50 text-red-700"}`}>
-            {uploadMsg.text}
-          </p>
-        )}
-      </section>
-
-      {/* Analysis Controls */}
-      <section className="bg-white border border-gray-200 rounded-xl p-6">
-        <h2 className="text-base font-semibold text-gray-900 mb-4">🔬 Analisi AI</h2>
-
-        {isInactive && (
-          <div className="mb-4 bg-amber-50 border border-amber-200 rounded-lg px-4 py-3 text-sm text-amber-800">
-            Trial scaduto. <a href="/billing" className="underline font-medium">Attiva il piano</a> per eseguire l'analisi.
-          </div>
-        )}
-
-        <div className="flex flex-wrap gap-3 items-center">
-          <select
-            value={period}
-            onChange={(e) => setPeriod(e.target.value)}
-            className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-900"
-          >
-            <option value="all">Tutte le recensioni</option>
-            <option value="last_30_days">Ultimi 30 giorni</option>
-          </select>
-          <button
-            onClick={handleRunAnalysis}
-            disabled={running || isInactive}
-            className="flex items-center gap-2 px-5 py-2 bg-gray-900 text-white text-sm font-medium rounded-lg hover:bg-gray-700 disabled:opacity-50 transition-colors"
-          >
-            {running ? (
-              <><span className="animate-spin">⟳</span> Analisi in corso...</>
-            ) : (
-              "▶ Avvia Analisi"
-            )}
-          </button>
-          <button
-            onClick={handleLoadLatest}
-            disabled={running}
-            className="px-4 py-2 text-sm text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-50"
-          >
-            Carica ultima analisi
-          </button>
-        </div>
-
-        {error && (
-          <p className="mt-3 text-sm text-red-600 bg-red-50 px-3 py-2 rounded-lg">{error}</p>
-        )}
-      </section>
-
-      {/* Results */}
-      {analysis && <AnalysisResults analysis={analysis} />}
-    </div>
-  );
-}
-
-// ── Sub-components ────────────────────────────────────────────────────────────
-
-function EmptyState({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <div className="text-center py-20">
-      <h2 className="text-xl font-semibold text-gray-900 mb-3">{title}</h2>
-      {children}
-    </div>
-  );
-}
-
-function SubscriptionBadge({ status }: { status: string }) {
-  const config: Record<string, { label: string; class: string }> = {
-    active: { label: "Attivo", class: "bg-green-100 text-green-800" },
-    trial: { label: "Trial", class: "bg-blue-100 text-blue-800" },
-    inactive: { label: "Scaduto", class: "bg-red-100 text-red-800" },
-  };
-  const c = config[status] ?? config.inactive;
-  return (
-    <span className={`text-xs font-medium px-2.5 py-1 rounded-full ${c.class}`}>
-      {c.label}
-    </span>
-  );
-}
-
-function AnalysisResults({ analysis }: { analysis: AnalysisData }) {
-  const pos = analysis.sentiment.positive_percentage;
-  const neg = analysis.sentiment.negative_percentage;
-  const neutral = Math.max(0, 100 - pos - neg);
-  const date = new Date(analysis.created_at).toLocaleDateString("it-IT", {
-    day: "numeric", month: "long", year: "numeric", hour: "2-digit", minute: "2-digit",
-  });
-
-  return (
-    <div className="space-y-6">
-      <p className="text-xs text-gray-400">Analisi del {date} · periodo: {analysis.period === "all" ? "tutte le recensioni" : "ultimi 30 giorni"}</p>
-
-      {/* Sentiment */}
-      <section className="bg-white border border-gray-200 rounded-xl p-6">
-        <h2 className="text-base font-semibold text-gray-900 mb-5">😊 Sentiment</h2>
-        <div className="flex gap-4 mb-5">
-          <SentimentCard value={pos} label="Positivo" color="green" />
-          <SentimentCard value={neg} label="Negativo" color="red" />
-          <SentimentCard value={neutral} label="Neutro" color="gray" />
-        </div>
-        {/* Bar */}
-        <div className="h-3 rounded-full overflow-hidden flex bg-gray-100">
-          {pos > 0 && <div className="bg-green-400 transition-all" style={{ width: `${pos}%` }} />}
-          {neutral > 0 && <div className="bg-gray-300 transition-all" style={{ width: `${neutral}%` }} />}
-          {neg > 0 && <div className="bg-red-400 transition-all" style={{ width: `${neg}%` }} />}
-        </div>
-        <div className="flex justify-between text-xs text-gray-400 mt-1">
-          <span>0%</span><span>100%</span>
-        </div>
-      </section>
-
-      {/* Issues + Strengths */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        <section className="bg-white border border-gray-200 rounded-xl p-6">
-          <h2 className="text-base font-semibold text-gray-900 mb-4">⚠️ Problemi principali</h2>
-          {analysis.issues.length > 0 ? (
-            <ul className="space-y-3">
-              {analysis.issues.map((issue, i) => (
-                <IssueRow key={i} name={issue.name} frequency={issue.frequency} color="red" />
-              ))}
-            </ul>
-          ) : (
-            <p className="text-sm text-gray-400">Nessun problema rilevato.</p>
-          )}
-        </section>
-
-        <section className="bg-white border border-gray-200 rounded-xl p-6">
-          <h2 className="text-base font-semibold text-gray-900 mb-4">✨ Punti di forza</h2>
-          {analysis.strengths.length > 0 ? (
-            <ul className="space-y-3">
-              {analysis.strengths.map((s, i) => (
-                <IssueRow key={i} name={s.name} frequency={s.frequency} color="green" />
-              ))}
-            </ul>
-          ) : (
-            <p className="text-sm text-gray-400">Nessun punto di forza rilevato.</p>
-          )}
-        </section>
-      </div>
-
-      {/* Suggestions */}
-      {analysis.suggestions.length > 0 && (
-        <section className="bg-white border border-gray-200 rounded-xl p-6">
-          <h2 className="text-base font-semibold text-gray-900 mb-4">💡 Azioni consigliate</h2>
-          <div className="space-y-3">
-            {analysis.suggestions.map((s, i) => (
-              <div key={i} className="flex gap-4 p-4 bg-gray-50 rounded-lg border border-gray-100">
-                <div className="shrink-0 w-6 h-6 bg-gray-900 text-white text-xs rounded-full flex items-center justify-center font-bold">
-                  {i + 1}
-                </div>
-                <div>
-                  <p className="text-sm font-medium text-gray-800 capitalize">{s.problem}</p>
-                  <p className="text-sm text-gray-600 mt-0.5">→ {s.action}</p>
-                </div>
+          {/* Suggestions */}
+          {report.suggestions.length > 0 && (
+            <div>
+              <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-3">
+                ✅ Azioni per oggi
+              </h2>
+              <div className="space-y-2">
+                {report.suggestions.map((s, i) => <SuggestionCard key={i} s={s} />)}
               </div>
-            ))}
-          </div>
-        </section>
+            </div>
+          )}
+
+          {/* 7-day forecast mini table */}
+          {report.forecast_7days.length > 0 && (
+            <div>
+              <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-3">
+                📈 Previsione 7 giorni
+              </h2>
+              <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
+                <table className="w-full text-sm">
+                  <thead className="bg-gray-50">
+                    <tr>
+                      <th className="text-left px-4 py-2 text-gray-500 font-medium">Data</th>
+                      <th className="text-right px-4 py-2 text-gray-500 font-medium">Coperti</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {report.forecast_7days.map((f, i) => (
+                      <tr key={f.id} className={i % 2 === 0 ? "bg-white" : "bg-gray-50"}>
+                        <td className="px-4 py-2 text-gray-700">{f.date}</td>
+                        <td className="px-4 py-2 text-right font-medium text-gray-900">{f.expected_covers}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {/* Review summary */}
+          {report.review_summary.sentiment_positive !== null && (
+            <div>
+              <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-3">
+                ⭐ Sentiment recensioni
+              </h2>
+              <div className="bg-white border border-gray-200 rounded-xl p-4">
+                <div className="flex gap-4 mb-3">
+                  <div className="flex items-center gap-2">
+                    <span className="w-3 h-3 rounded-full bg-green-400 inline-block" />
+                    <span className="text-sm text-gray-700">Positivo: <strong>{Math.round(report.review_summary.sentiment_positive ?? 0)}%</strong></span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="w-3 h-3 rounded-full bg-red-400 inline-block" />
+                    <span className="text-sm text-gray-700">Negativo: <strong>{Math.round(report.review_summary.sentiment_negative ?? 0)}%</strong></span>
+                  </div>
+                </div>
+                {report.review_summary.top_issues.length > 0 && (
+                  <div>
+                    <p className="text-xs text-gray-400 mb-1">Problemi principali:</p>
+                    <div className="flex flex-wrap gap-2">
+                      {report.review_summary.top_issues.map((issue, i) => (
+                        <span key={i} className="text-xs bg-red-50 text-red-700 px-2 py-1 rounded-full">
+                          {issue.name}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+        </>
+      ) : (
+        <div className="text-center py-12 text-gray-400 text-sm">
+          Nessun dato disponibile. Carica vendite e recensioni per iniziare.
+        </div>
       )}
     </div>
   );
-}
 
-function SentimentCard({ value, label, color }: { value: number; label: string; color: "green" | "red" | "gray" }) {
-  const colors = {
-    green: "bg-green-50 text-green-800",
-    red: "bg-red-50 text-red-800",
-    gray: "bg-gray-50 text-gray-700",
-  };
-  return (
-    <div className={`flex-1 rounded-xl px-4 py-3 text-center ${colors[color]}`}>
-      <div className="text-2xl font-bold">{value}%</div>
-      <div className="text-xs mt-0.5 font-medium">{label}</div>
+  // ── Tab: Recensioni ────────────────────────────────────────────────────────
+  const TabRecensioni = () => (
+    <div className="space-y-6">
+      {/* Upload CSV */}
+      <div className="bg-white border border-gray-200 rounded-xl p-5">
+        <h3 className="font-semibold text-gray-800 mb-1">📁 Importa da CSV</h3>
+        <p className="text-xs text-gray-500 mb-3">Colonne: date, platform, review_text, rating</p>
+        <label className="inline-flex items-center gap-2 cursor-pointer bg-gray-900 text-white px-4 py-2 rounded-lg text-sm hover:bg-gray-700 transition-colors">
+          <span>Scegli file</span>
+          <input type="file" accept=".csv" className="hidden" onChange={handleReviewCsvUpload} />
+        </label>
+      </div>
+
+      {/* Paste text */}
+      <div className="bg-white border border-gray-200 rounded-xl p-5">
+        <h3 className="font-semibold text-gray-800 mb-1">✍️ Incolla recensioni</h3>
+        <p className="text-xs text-gray-500 mb-3">Una recensione per riga</p>
+        <textarea
+          value={reviewText}
+          onChange={e => setReviewText(e.target.value)}
+          rows={5}
+          placeholder={"Ottimo cibo, servizio veloce!\nPiatti freddi, deluso..."}
+          className="w-full border border-gray-200 rounded-lg p-3 text-sm focus:outline-none focus:ring-2 focus:ring-gray-900 resize-none"
+        />
+        <button
+          onClick={handleReviewTextUpload}
+          disabled={!reviewText.trim()}
+          className="mt-2 bg-gray-900 text-white px-4 py-2 rounded-lg text-sm hover:bg-gray-700 disabled:opacity-40 transition-colors"
+        >
+          Importa
+        </button>
+      </div>
+
+      {uploadMsg && (
+        <p className={`text-sm px-3 py-2 rounded-lg ${uploadMsg.startsWith("✅") ? "bg-green-50 text-green-700" : uploadMsg.startsWith("❌") ? "bg-red-50 text-red-700" : "bg-gray-50 text-gray-600"}`}>
+          {uploadMsg}
+        </p>
+      )}
+
+      {/* Analysis */}
+      <div className="bg-white border border-gray-200 rounded-xl p-5">
+        <h3 className="font-semibold text-gray-800 mb-1">🤖 Analisi AI</h3>
+        <p className="text-xs text-gray-500 mb-3">Analizza tutte le recensioni e genera insight</p>
+        <button
+          onClick={handleRunAnalysis}
+          disabled={analysisLoading || isInactive}
+          className="bg-gray-900 text-white px-4 py-2 rounded-lg text-sm hover:bg-gray-700 disabled:opacity-40 transition-colors"
+        >
+          {analysisLoading ? "Analisi in corso…" : "Esegui analisi"}
+        </button>
+        {isInactive && (
+          <p className="text-xs text-amber-600 mt-2">
+            Piano scaduto. <Link href="/billing" className="underline">Attiva il piano →</Link>
+          </p>
+        )}
+        {analysisMsg && (
+          <p className={`text-sm mt-2 ${analysisMsg.startsWith("✅") ? "text-green-600" : analysisMsg.startsWith("❌") ? "text-red-600" : "text-gray-500"}`}>
+            {analysisMsg}
+          </p>
+        )}
+      </div>
+
+      {/* Analysis results */}
+      {analysis && (
+        <div className="space-y-4">
+          {/* Sentiment */}
+          <div className="bg-white border border-gray-200 rounded-xl p-5">
+            <h3 className="font-semibold text-gray-800 mb-3">Sentiment</h3>
+            <div className="flex gap-6 mb-3 text-sm">
+              <span className="text-green-600 font-semibold">✅ {Math.round(analysis.sentiment.positive_percentage)}% positivo</span>
+              <span className="text-red-600 font-semibold">❌ {Math.round(analysis.sentiment.negative_percentage)}% negativo</span>
+              <span className="text-gray-400">{Math.round(100 - analysis.sentiment.positive_percentage - analysis.sentiment.negative_percentage)}% neutro</span>
+            </div>
+            <div className="h-2 rounded-full bg-gray-100 overflow-hidden flex">
+              <div className="bg-green-400 h-full" style={{ width: `${analysis.sentiment.positive_percentage}%` }} />
+              <div className="bg-gray-200 h-full" style={{ width: `${100 - analysis.sentiment.positive_percentage - analysis.sentiment.negative_percentage}%` }} />
+              <div className="bg-red-400 h-full" style={{ width: `${analysis.sentiment.negative_percentage}%` }} />
+            </div>
+          </div>
+
+          {/* Issues */}
+          {analysis.issues.length > 0 && (
+            <div className="bg-white border border-gray-200 rounded-xl p-5">
+              <h3 className="font-semibold text-gray-800 mb-3">⚠️ Problemi ({analysis.issues.length})</h3>
+              <div className="space-y-2">
+                {analysis.issues.map((issue, i) => (
+                  <div key={i} className="flex items-center justify-between">
+                    <span className="text-sm text-gray-700">{issue.name}</span>
+                    <span className="text-xs bg-red-50 text-red-700 px-2 py-0.5 rounded-full">{issue.frequency}x</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Strengths */}
+          {analysis.strengths.length > 0 && (
+            <div className="bg-white border border-gray-200 rounded-xl p-5">
+              <h3 className="font-semibold text-gray-800 mb-3">💪 Punti di forza ({analysis.strengths.length})</h3>
+              <div className="space-y-2">
+                {analysis.strengths.map((s, i) => (
+                  <div key={i} className="flex items-center justify-between">
+                    <span className="text-sm text-gray-700">{s.name}</span>
+                    <span className="text-xs bg-green-50 text-green-700 px-2 py-0.5 rounded-full">{s.frequency}x</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Suggestions */}
+          {analysis.suggestions.length > 0 && (
+            <div className="bg-white border border-gray-200 rounded-xl p-5">
+              <h3 className="font-semibold text-gray-800 mb-3">🎯 Suggerimenti operativi</h3>
+              <ol className="space-y-3">
+                {analysis.suggestions.map((s, i) => (
+                  <li key={i} className="flex gap-3 text-sm text-gray-700">
+                    <span className="shrink-0 w-6 h-6 bg-gray-100 text-gray-500 rounded-full flex items-center justify-center text-xs font-bold">{i + 1}</span>
+                    <div>
+                      <span className="font-medium text-gray-900">{s.problem}</span>
+                      <span className="text-gray-400 mx-1">→</span>
+                      {s.action}
+                    </div>
+                  </li>
+                ))}
+              </ol>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
-}
 
-function IssueRow({ name, frequency, color }: { name: string; frequency: number; color: "red" | "green" }) {
-  const badge = color === "red"
-    ? "bg-red-100 text-red-700"
-    : "bg-green-100 text-green-700";
+  // ── Tab: Dati ──────────────────────────────────────────────────────────────
+  const TabDati = () => (
+    <div className="space-y-6">
+      {/* Sales upload */}
+      <div className="bg-white border border-gray-200 rounded-xl p-5">
+        <h3 className="font-semibold text-gray-800 mb-1">📊 Importa vendite (CSV)</h3>
+        <p className="text-xs text-gray-500 mb-3">Colonne richieste: <code className="bg-gray-100 px-1 rounded">date, product, quantity</code> — opzionale: revenue</p>
+        <label className="inline-flex items-center gap-2 cursor-pointer bg-gray-900 text-white px-4 py-2 rounded-lg text-sm hover:bg-gray-700 transition-colors">
+          <span>Scegli file CSV</span>
+          <input type="file" accept=".csv" className="hidden" onChange={handleSalesCsvUpload} />
+        </label>
+      </div>
+
+      {/* Generate forecast */}
+      <div className="bg-white border border-gray-200 rounded-xl p-5">
+        <h3 className="font-semibold text-gray-800 mb-1">🔮 Genera previsione</h3>
+        <p className="text-xs text-gray-500 mb-3">Analizza le vendite storiche e prevede i prossimi 7 giorni</p>
+        <button
+          onClick={handleGenerateForecast}
+          className="bg-gray-900 text-white px-4 py-2 rounded-lg text-sm hover:bg-gray-700 transition-colors"
+        >
+          Genera previsione
+        </button>
+      </div>
+
+      {salesMsg && (
+        <p className={`text-sm px-3 py-2 rounded-lg ${salesMsg.startsWith("✅") ? "bg-green-50 text-green-700" : salesMsg.startsWith("❌") ? "bg-red-50 text-red-700" : "bg-gray-50 text-gray-600"}`}>
+          {salesMsg}
+        </p>
+      )}
+
+      {/* Link to products setup */}
+      <div className="bg-blue-50 border border-blue-200 rounded-xl p-4">
+        <p className="text-sm text-blue-800 font-medium mb-1">🛒 Configura prodotti e ingredienti</p>
+        <p className="text-xs text-blue-600">Mappa i tuoi prodotti agli ingredienti per ricevere suggerimenti automatici sulle forniture.</p>
+        <Link href="/setup" className="inline-block mt-2 text-xs bg-blue-700 text-white px-3 py-1.5 rounded-lg hover:bg-blue-800 transition-colors">
+          Configura →
+        </Link>
+      </div>
+    </div>
+  );
+
   return (
-    <li className="flex items-center justify-between gap-2">
-      <span className="text-sm text-gray-700 capitalize">{name}</span>
-      <span className={`text-xs font-medium px-2 py-0.5 rounded-full shrink-0 ${badge}`}>
-        {frequency}×
-      </span>
-    </li>
+    <div>
+      {/* Header */}
+      <div className="mb-6">
+        <h1 className="text-2xl font-bold text-gray-900">{activeRestaurant?.name}</h1>
+        <p className="text-sm text-gray-500 mt-1">Report operativo • {new Date().toLocaleDateString("it-IT", { weekday: "long", day: "numeric", month: "long" })}</p>
+      </div>
+
+      {/* Tab navigation */}
+      <div className="flex gap-1 bg-gray-100 p-1 rounded-xl mb-6 w-fit">
+        {(["oggi", "recensioni", "dati"] as const).map(t => (
+          <button
+            key={t}
+            onClick={() => setTab(t)}
+            className={`px-4 py-2 text-sm font-medium rounded-lg transition-colors capitalize ${
+              tab === t ? "bg-white text-gray-900 shadow-sm" : "text-gray-500 hover:text-gray-700"
+            }`}
+          >
+            {t === "oggi" ? "📊 Oggi" : t === "recensioni" ? "⭐ Recensioni" : "📈 Dati"}
+          </button>
+        ))}
+      </div>
+
+      {/* Tab content */}
+      {tab === "oggi" && <TabOggi />}
+      {tab === "recensioni" && <TabRecensioni />}
+      {tab === "dati" && <TabDati />}
+    </div>
   );
 }

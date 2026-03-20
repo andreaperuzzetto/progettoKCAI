@@ -8,6 +8,7 @@ import { useState } from "react";
 
 const links = [
   { href: "/", label: "Dashboard" },
+  { href: "/setup", label: "Configura" },
   { href: "/billing", label: "Piano" },
 ];
 

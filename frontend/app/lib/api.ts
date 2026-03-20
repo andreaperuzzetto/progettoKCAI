@@ -15,7 +15,7 @@ export function clearToken() {
   localStorage.removeItem("access_token");
 }
 
-function authHeaders(): Record<string, string> {
+export function authHeaders(): Record<string, string> {
   const token = getToken();
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
@@ -118,7 +118,7 @@ export interface Issue {
   frequency: number;
 }
 
-export interface Suggestion {
+export interface AnalysisSuggestion {
   problem: string;
   action: string;
 }
@@ -132,7 +132,7 @@ export interface AnalysisData {
   };
   issues: Issue[];
   strengths: Issue[];
-  suggestions: Suggestion[];
+  suggestions: AnalysisSuggestion[];
   created_at: string;
 }
 
@@ -170,4 +170,96 @@ export async function createCheckoutSession(): Promise<{ checkout_url: string }>
     throw new Error(err.detail ?? "Billing error");
   }
   return res.json();
+}
+
+// ── Phase 3: Sales ────────────────────────────────────────────────────────────
+
+export async function uploadSalesCsv(restaurantId: string, file: File): Promise<{ inserted: number; total_rows: number; skipped: number }> {
+  const form = new FormData();
+  form.append("file", file);
+  const res = await fetch(`${API_BASE}/sales/upload?restaurant_id=${restaurantId}`, {
+    method: "POST",
+    headers: authHeaders(),
+    body: form,
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail ?? "Upload vendite fallito");
+  }
+  return res.json();
+}
+
+export async function fetchSalesSummary(restaurantId: string, days = 30): Promise<SalesSummary> {
+  const res = await fetch(`${API_BASE}/sales/summary?restaurant_id=${restaurantId}&days=${days}`, {
+    headers: authHeaders(),
+  });
+  if (!res.ok) throw new Error("Impossibile caricare riepilogo vendite");
+  return res.json();
+}
+
+export interface SalesSummary {
+  period_days: number;
+  total_records: number;
+  top_products: { name: string; total_quantity: number }[];
+  daily_totals: { date: string; total_quantity: number }[];
+}
+
+// ── Phase 3: Forecast ─────────────────────────────────────────────────────────
+
+export async function generateForecast(restaurantId: string): Promise<{ generated: number; forecasts: ForecastDay[] }> {
+  const res = await fetch(`${API_BASE}/forecast/generate?restaurant_id=${restaurantId}`, {
+    method: "POST",
+    headers: authHeaders(),
+  });
+  if (!res.ok) throw new Error("Generazione previsione fallita");
+  return res.json();
+}
+
+export async function fetchLatestForecast(restaurantId: string): Promise<{ forecasts: ForecastDay[] }> {
+  const res = await fetch(`${API_BASE}/forecast/latest?restaurant_id=${restaurantId}`, {
+    headers: authHeaders(),
+  });
+  if (!res.ok) throw new Error("Impossibile caricare previsione");
+  return res.json();
+}
+
+export interface ForecastDay {
+  id: string;
+  date: string;
+  expected_covers: number;
+  product_predictions: Record<string, number>;
+}
+
+// ── Phase 3: Daily Report ─────────────────────────────────────────────────────
+
+export async function fetchDailyReport(restaurantId: string): Promise<DailyReport> {
+  const res = await fetch(`${API_BASE}/daily-report?restaurant_id=${restaurantId}`, {
+    headers: authHeaders(),
+  });
+  if (!res.ok) throw new Error("Impossibile caricare report giornaliero");
+  return res.json();
+}
+
+export interface DailyReport {
+  date: string;
+  restaurant_id: string;
+  tomorrow: {
+    date: string;
+    expected_covers: number;
+    top_products: { name: string; predicted_qty: number }[];
+  };
+  forecast_7days: ForecastDay[];
+  suggestions: Suggestion[];
+  review_summary: {
+    sentiment_positive: number | null;
+    sentiment_negative: number | null;
+    top_issues: Issue[];
+  };
+}
+
+export interface Suggestion {
+  type: string;
+  message: string;
+  priority: "high" | "medium" | "low";
+  source?: string;
 }

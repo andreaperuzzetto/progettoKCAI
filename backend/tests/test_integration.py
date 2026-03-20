@@ -195,3 +195,141 @@ def test_analysis_requires_subscription(client, restaurant, auth_headers, db_ses
         headers=auth_headers,
     )
     assert resp.status_code == 402
+
+
+# ── Sales ─────────────────────────────────────────────────────────────
+
+SALES_CSV = (
+    "date,product,quantity\n"
+    "2025-01-01,pizza margherita,10\n"
+    "2025-01-01,birra,15\n"
+    "2025-01-02,pizza margherita,12\n"
+    "2025-01-03,pizza margherita,8\n"
+    "2025-01-04,pizza margherita,11\n"
+    "2025-01-05,birra,20\n"
+    "2025-01-06,pizza margherita,9\n"
+    "2025-01-07,pizza margherita,13\n"
+)
+
+
+def test_upload_sales_csv(client, restaurant, auth_headers, db_session):
+    from backend.db.models import Sales
+    resp = client.post(
+        "/sales/upload",
+        params={"restaurant_id": restaurant},
+        files={"file": ("sales.csv", SALES_CSV.encode(), "text/csv")},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["inserted"] == 8
+    rows = db_session.query(Sales).filter(Sales.restaurant_id == restaurant).all()
+    assert len(rows) == 8
+
+
+def test_upload_sales_dedup(client, restaurant, auth_headers, db_session):
+    from backend.db.models import Sales
+    for _ in range(2):
+        client.post(
+            "/sales/upload",
+            params={"restaurant_id": restaurant},
+            files={"file": ("sales.csv", SALES_CSV.encode(), "text/csv")},
+            headers=auth_headers,
+        )
+    rows = db_session.query(Sales).filter(Sales.restaurant_id == restaurant).all()
+    assert len(rows) == 8  # no duplicates
+
+
+def test_sales_summary(client, restaurant, auth_headers):
+    client.post(
+        "/sales/upload",
+        params={"restaurant_id": restaurant},
+        files={"file": ("sales.csv", SALES_CSV.encode(), "text/csv")},
+        headers=auth_headers,
+    )
+    resp = client.get("/sales/summary", params={"restaurant_id": restaurant, "days": 500}, headers=auth_headers)
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["total_records"] == 8
+    assert data["top_products"][0]["name"] == "pizza margherita"
+
+
+# ── Products & Ingredients ────────────────────────────────────────────
+
+def test_create_product_and_ingredient(client, restaurant, auth_headers):
+    resp = client.post(
+        "/products",
+        params={"restaurant_id": restaurant},
+        json={"name": "Pizza Margherita", "category": "pizza"},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 200
+    product_id = resp.json()["id"]
+
+    resp = client.post(
+        "/ingredients",
+        params={"restaurant_id": restaurant},
+        json={"name": "Mozzarella", "unit": "kg"},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 200
+    ing_id = resp.json()["id"]
+
+    resp = client.post(
+        f"/products/{product_id}/ingredients",
+        params={"restaurant_id": restaurant},
+        json=[{"ingredient_id": ing_id, "quantity_per_unit": 0.15}],
+        headers=auth_headers,
+    )
+    assert resp.status_code == 200
+    assert resp.json()["mappings_set"] == 1
+
+
+def test_list_products(client, restaurant, auth_headers):
+    client.post(
+        "/products",
+        params={"restaurant_id": restaurant},
+        json={"name": "Tiramisu", "category": "dolci"},
+        headers=auth_headers,
+    )
+    resp = client.get("/products", params={"restaurant_id": restaurant}, headers=auth_headers)
+    assert resp.status_code == 200
+    assert len(resp.json()) >= 1
+
+
+# ── Forecast ──────────────────────────────────────────────────────────
+
+def test_generate_forecast(client, restaurant, auth_headers):
+    # Upload some sales data first
+    client.post(
+        "/sales/upload",
+        params={"restaurant_id": restaurant},
+        files={"file": ("sales.csv", SALES_CSV.encode(), "text/csv")},
+        headers=auth_headers,
+    )
+    resp = client.post("/forecast/generate", params={"restaurant_id": restaurant}, headers=auth_headers)
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["generated"] == 7
+    assert len(data["forecasts"]) == 7
+
+
+def test_forecast_without_data_returns_zeros(client, restaurant, auth_headers):
+    resp = client.post("/forecast/generate", params={"restaurant_id": restaurant}, headers=auth_headers)
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["generated"] == 7
+    # No data → expected_covers should be 0
+    assert all(f["expected_covers"] == 0 for f in data["forecasts"])
+
+
+# ── Daily report ──────────────────────────────────────────────────────
+
+def test_daily_report(client, restaurant, auth_headers):
+    resp = client.get("/daily-report", params={"restaurant_id": restaurant}, headers=auth_headers)
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "tomorrow" in data
+    assert "suggestions" in data
+    assert "review_summary" in data
+    assert "forecast_7days" in data
