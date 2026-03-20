@@ -22,6 +22,9 @@ from backend.api.products import router as products_router
 from backend.api.forecast import router as forecast_router
 from backend.api.daily_report import router as daily_report_router
 from backend.api.notifications import router as notifications_router
+from backend.api.alerts import router as alerts_router
+from backend.api.correlations import router as correlations_router
+from backend.api.integrations import router as integrations_router
 
 logger = logging.getLogger(__name__)
 
@@ -95,8 +98,11 @@ async def lifespan(app: FastAPI):
     scheduler = BackgroundScheduler()
     scheduler.add_job(_run_daily_forecasts, "cron", hour=2, minute=0, id="daily_forecast")
     scheduler.add_job(_run_daily_emails, "cron", hour=7, minute=0, id="daily_email")
+    scheduler.add_job(_run_alert_generation, "cron", hour=8, minute=0, id="morning_alerts")
+    scheduler.add_job(_run_alert_generation, "cron", hour=16, minute=0, id="afternoon_alerts")
+    scheduler.add_job(_run_integration_sync, "interval", hours=1, id="integration_sync")
     scheduler.start()
-    logger.info("Scheduler started: forecast at 02:00, email at 07:00")
+    logger.info("Scheduler started: forecast 02:00, email 07:00, alerts 08:00+16:00, sync hourly")
 
     yield
 
@@ -127,3 +133,33 @@ app.include_router(products_router)
 app.include_router(forecast_router)
 app.include_router(daily_report_router)
 app.include_router(notifications_router)
+app.include_router(alerts_router)
+app.include_router(correlations_router)
+app.include_router(integrations_router)
+
+
+def _run_alert_generation():
+    """Twice-daily job: detect alert conditions for all restaurants."""
+    from backend.services.alert_service import generate_alerts
+    db = SessionLocal()
+    try:
+        restaurants = db.query(Restaurant).all()
+        for r in restaurants:
+            try:
+                alerts = generate_alerts(db, r.id)
+                if alerts:
+                    logger.info("Generated %d alerts for restaurant %s", len(alerts), r.id)
+            except Exception as e:
+                logger.error("Alert generation failed for %s: %s", r.id, e)
+    finally:
+        db.close()
+
+
+def _run_integration_sync():
+    """Hourly job: sync all active integrations."""
+    from backend.services.integration_service import sync_all_active
+    db = SessionLocal()
+    try:
+        sync_all_active(db)
+    finally:
+        db.close()

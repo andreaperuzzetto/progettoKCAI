@@ -19,6 +19,7 @@ class User(Base):
     email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     subscription_status: Mapped[str] = mapped_column(String(20), default="trial", nullable=False)
+    plan: Mapped[str] = mapped_column(String(20), default="starter", nullable=False)  # starter / pro / premium
     trial_ends_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
@@ -118,4 +119,40 @@ class Forecast(Base):
     date: Mapped[date] = mapped_column(DATE, nullable=False)
     expected_covers: Mapped[int] = mapped_column(Integer, nullable=False)
     product_predictions: Mapped[dict] = mapped_column(JSON, default=dict)  # {product_name: qty}
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+# ── Phase 4: Alerts & Integrations ────────────────────────────────────────────
+
+class Alert(Base):
+    __tablename__ = "alerts"
+
+    id: Mapped[uuid.UUID] = mapped_column(PK_UUID, default=uuid.uuid4, primary_key=True)
+    restaurant_id: Mapped[uuid.UUID] = mapped_column(FK_UUID, ForeignKey("restaurants.id"), nullable=False)
+    type: Mapped[str] = mapped_column(String(50), nullable=False)   # high_demand / negative_spike / sales_drop / low_sentiment / issue_increase
+    severity: Mapped[str] = mapped_column(String(20), default="medium")  # high / medium / low
+    message: Mapped[str] = mapped_column(TEXT, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    read_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+
+class CorrelationResult(Base):
+    __tablename__ = "correlation_results"
+
+    id: Mapped[uuid.UUID] = mapped_column(PK_UUID, default=uuid.uuid4, primary_key=True)
+    restaurant_id: Mapped[uuid.UUID] = mapped_column(FK_UUID, ForeignKey("restaurants.id"), nullable=False)
+    correlations: Mapped[list] = mapped_column(JSON, default=list)  # [{cause, confidence, suggestion, impact_level}]
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class Integration(Base):
+    __tablename__ = "integrations"
+
+    id: Mapped[uuid.UUID] = mapped_column(PK_UUID, default=uuid.uuid4, primary_key=True)
+    restaurant_id: Mapped[uuid.UUID] = mapped_column(FK_UUID, ForeignKey("restaurants.id"), nullable=False)
+    provider: Mapped[str] = mapped_column(String(50), nullable=False)   # square / toast / google_reviews / ubereats / deliveroo
+    config_json: Mapped[dict] = mapped_column(JSON, default=dict)       # {api_key, location_id, …} — never log plaintext
+    status: Mapped[str] = mapped_column(String(20), default="pending")  # active / error / pending
+    last_sync_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    error_message: Mapped[Optional[str]] = mapped_column(TEXT, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

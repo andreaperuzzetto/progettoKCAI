@@ -3,473 +3,476 @@
 import { useState, useEffect, useCallback } from "react";
 import { useAuth } from "./lib/auth-context";
 import {
+  fetchDailyReport, fetchAlerts, markAlertRead, generateAlerts,
   uploadReviewsCsv, uploadReviewsText, runAnalysis, fetchLatestAnalysis,
-  uploadSalesCsv, generateForecast, fetchDailyReport,
-  type AnalysisData, type DailyReport, type Suggestion, type AnalysisSuggestion,
+  uploadSalesCsv, generateForecast, fetchLatestCorrelation, runCorrelation,
+  type DailyReport, type AlertItem, type AnalysisData, type Correlation, type Suggestion,
 } from "./lib/api";
 import Link from "next/link";
 
-// ── Priority badge ─────────────────────────────────────────────────────────────
-function PriorityBadge({ priority }: { priority: string }) {
-  const cls =
-    priority === "high" ? "bg-red-100 text-red-700" :
-    priority === "medium" ? "bg-amber-100 text-amber-700" :
-    "bg-green-100 text-green-700";
-  const label = priority === "high" ? "Alta" : priority === "medium" ? "Media" : "Bassa";
-  return <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${cls}`}>{label}</span>;
+// ── Helpers ───────────────────────────────────────────────────────────────────
+const PRIORITY_COLOR = {
+  high: "bg-red-100 text-red-700 border-red-200",
+  medium: "bg-amber-100 text-amber-700 border-amber-200",
+  low: "bg-green-100 text-green-700 border-green-200",
+};
+const SEVERITY_ICON = { high: "🔴", medium: "🟡", low: "🟢" };
+const TYPE_ICON: Record<string, string> = {
+  staffing: "👥", inventory: "🛒", kitchen: "🍳", menu: "📋",
+  operations: "🧹", ambiance: "🎵", logistics: "🚗",
+};
+
+function Badge({ text, cls }: { text: string; cls: string }) {
+  return <span className={`text-xs font-medium px-2 py-0.5 rounded-full border ${cls}`}>{text}</span>;
 }
 
-// ── Suggestion card ────────────────────────────────────────────────────────────
-function SuggestionCard({ s }: { s: Suggestion }) {
-  const icon =
-    s.type === "staffing" ? "👥" :
-    s.type === "inventory" ? "🛒" :
-    s.type === "kitchen" ? "🍳" :
-    s.type === "menu" ? "📋" :
-    s.type === "operations" ? "🧹" :
-    "💡";
+function ActionCard({ s }: { s: Suggestion }) {
+  const icon = TYPE_ICON[s.type] ?? "💡";
+  const color = PRIORITY_COLOR[s.priority] ?? PRIORITY_COLOR.low;
   return (
-    <div className="flex items-start gap-3 p-3 bg-white border border-gray-200 rounded-xl">
+    <div className="flex items-start gap-3 bg-white border border-gray-100 rounded-xl p-3 shadow-sm">
       <span className="text-xl shrink-0 mt-0.5">{icon}</span>
-      <div className="flex-1 min-w-0">
-        <p className="text-sm text-gray-800 leading-relaxed">{s.message}</p>
-      </div>
-      <PriorityBadge priority={s.priority} />
+      <p className="text-sm text-gray-800 leading-snug flex-1">{s.message}</p>
+      <Badge text={s.priority === "high" ? "Alta" : s.priority === "medium" ? "Media" : "Bassa"} cls={color} />
     </div>
   );
 }
 
-// ── Stat card ──────────────────────────────────────────────────────────────────
-function StatCard({ label, value, sub }: { label: string; value: string | number; sub?: string }) {
+function AlertCard({ alert, onRead }: { alert: AlertItem; onRead: (id: string) => void }) {
+  const icon = SEVERITY_ICON[alert.severity] ?? "⚪";
   return (
-    <div className="bg-white border border-gray-200 rounded-xl p-4 text-center">
-      <p className="text-2xl font-bold text-gray-900">{value}</p>
-      <p className="text-sm text-gray-500 mt-0.5">{label}</p>
-      {sub && <p className="text-xs text-gray-400 mt-1">{sub}</p>}
+    <div className={`flex items-start gap-3 p-3 rounded-xl border transition-opacity ${alert.read ? "opacity-50 bg-gray-50 border-gray-100" : "bg-white border-gray-200 shadow-sm"}`}>
+      <span className="text-lg shrink-0 mt-0.5">{icon}</span>
+      <p className="text-sm text-gray-800 leading-snug flex-1">{alert.message}</p>
+      {!alert.read && (
+        <button onClick={() => onRead(alert.id)} className="text-xs text-gray-400 hover:text-gray-600 shrink-0 underline">
+          Letto
+        </button>
+      )}
     </div>
   );
 }
 
+// ── Main Dashboard ─────────────────────────────────────────────────────────────
 export default function DashboardPage() {
   const { user, activeRestaurant } = useAuth();
-  const [tab, setTab] = useState<"oggi" | "recensioni" | "dati">("oggi");
-
-  // Daily report state
-  const [report, setReport] = useState<DailyReport | null>(null);
-  const [reportLoading, setReportLoading] = useState(false);
-  const [reportError, setReportError] = useState("");
-
-  // Analysis state
-  const [analysis, setAnalysis] = useState<AnalysisData | null>(null);
-  const [analysisLoading, setAnalysisLoading] = useState(false);
-  const [analysisMsg, setAnalysisMsg] = useState("");
-
-  // Upload states
-  const [uploadMsg, setUploadMsg] = useState("");
-  const [salesMsg, setSalesMsg] = useState("");
-  const [reviewText, setReviewText] = useState("");
-
   const rid = activeRestaurant?.id;
 
-  const loadReport = useCallback(async () => {
+  // State
+  const [report, setReport] = useState<DailyReport | null>(null);
+  const [alerts, setAlerts] = useState<AlertItem[]>([]);
+  const [unread, setUnread] = useState(0);
+  const [analysis, setAnalysis] = useState<AnalysisData | null>(null);
+  const [correlations, setCorrelations] = useState<Correlation[]>([]);
+  const [tab, setTab] = useState<"oggi" | "problemi" | "azioni" | "dati">("oggi");
+  const [loading, setLoading] = useState(false);
+  const [msg, setMsg] = useState("");
+  const [reviewText, setReviewText] = useState("");
+
+  const isInactive = user?.subscription_status === "inactive";
+  const plan = user?.plan ?? "starter";
+  const canForecast = !isInactive;
+  const canAlerts = !isInactive;
+
+  const loadAll = useCallback(async () => {
     if (!rid) return;
-    setReportLoading(true);
-    setReportError("");
+    setLoading(true);
     try {
-      const r = await fetchDailyReport(rid);
-      setReport(r);
-    } catch {
-      setReportError("Previsione non disponibile. Carica dati di vendita e genera la previsione.");
+      const [r, a, al, corr] = await Promise.allSettled([
+        fetchDailyReport(rid),
+        fetchLatestAnalysis(rid),
+        fetchAlerts(rid),
+        fetchLatestCorrelation(rid),
+      ]);
+      if (r.status === "fulfilled") setReport(r.value);
+      if (a.status === "fulfilled") setAnalysis(a.value);
+      if (al.status === "fulfilled") { setAlerts(al.value.alerts); setUnread(al.value.unread_count); }
+      if (corr.status === "fulfilled") setCorrelations(corr.value.correlations);
     } finally {
-      setReportLoading(false);
+      setLoading(false);
     }
   }, [rid]);
 
-  const loadAnalysis = useCallback(async () => {
+  useEffect(() => { loadAll(); }, [loadAll]);
+
+  async function handleMarkRead(alertId: string) {
     if (!rid) return;
-    try {
-      const r = await fetchLatestAnalysis(rid);
-      setAnalysis(r ?? null);
-    } catch {}
-  }, [rid]);
-
-  useEffect(() => {
-    if (rid) {
-      loadReport();
-      loadAnalysis();
-    }
-  }, [rid, loadReport, loadAnalysis]);
-
-  // ── Handlers ──────────────────────────────────────────────────────────────────
-
-  async function handleReviewCsvUpload(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (!file || !rid) return;
-    setUploadMsg("Caricamento…");
-    try {
-      const r = await uploadReviewsCsv(rid, file);
-      setUploadMsg(`✅ ${r.rows_imported} recensioni importate`);
-    } catch (err: unknown) {
-      setUploadMsg(`❌ ${err instanceof Error ? err.message : "Errore"}`);
-    }
+    await markAlertRead(rid, alertId);
+    setAlerts(prev => prev.map(a => a.id === alertId ? { ...a, read: true } : a));
+    setUnread(prev => Math.max(0, prev - 1));
   }
 
-  async function handleReviewTextUpload() {
-    if (!rid || !reviewText.trim()) return;
-    const lines = reviewText.split("\n").map(l => l.trim()).filter(Boolean);
-    setUploadMsg("Caricamento…");
-    try {
-      const r = await uploadReviewsText(rid, lines);
-      setUploadMsg(`✅ ${r.rows_imported} recensioni importate`);
-      setReviewText("");
-    } catch (err: unknown) {
-      setUploadMsg(`❌ ${err instanceof Error ? err.message : "Errore"}`);
-    }
-  }
-
-  async function handleRunAnalysis() {
+  async function handleGenerateAlerts() {
     if (!rid) return;
-    setAnalysisLoading(true);
-    setAnalysisMsg("Analisi in corso…");
+    setMsg("Rilevamento alert…");
     try {
-      const r = await runAnalysis(rid, "all");
-      setAnalysis(r);
-      setAnalysisMsg("✅ Analisi completata");
-      loadReport(); // refresh report with new issues
-    } catch (err: unknown) {
-      setAnalysisMsg(`❌ ${err instanceof Error ? err.message : "Errore"}`);
-    } finally {
-      setAnalysisLoading(false);
+      const r = await generateAlerts(rid);
+      setMsg(`✅ ${r.generated} nuovi alert rilevati`);
+      loadAll();
+    } catch (e: unknown) {
+      setMsg(`❌ ${e instanceof Error ? e.message : "Errore"}`);
     }
   }
 
   async function handleSalesCsvUpload(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file || !rid) return;
-    setSalesMsg("Caricamento…");
+    setMsg("Caricamento…");
     try {
       const r = await uploadSalesCsv(rid, file);
-      setSalesMsg(`✅ ${r.inserted} vendite importate (${r.skipped} duplicate)`);
-    } catch (err: unknown) {
-      setSalesMsg(`❌ ${err instanceof Error ? err.message : "Errore"}`);
+      setMsg(`✅ ${r.inserted} vendite importate`);
+    } catch (e: unknown) {
+      setMsg(`❌ ${e instanceof Error ? e.message : "Errore"}`);
     }
   }
 
   async function handleGenerateForecast() {
     if (!rid) return;
-    setSalesMsg("Generazione previsione…");
+    setMsg("Generazione previsione…");
     try {
       const r = await generateForecast(rid);
-      setSalesMsg(`✅ Previsione generata per ${r.generated} giorni`);
-      loadReport();
-    } catch (err: unknown) {
-      setSalesMsg(`❌ ${err instanceof Error ? err.message : "Errore"}`);
+      setMsg(`✅ Previsione aggiornata (${r.generated} giorni)`);
+      loadAll();
+    } catch (e: unknown) {
+      setMsg(`❌ ${e instanceof Error ? e.message : "Errore"}`);
     }
   }
 
-  // ── No restaurant selected ─────────────────────────────────────────────────
+  async function handleReviewCsvUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file || !rid) return;
+    setMsg("Caricamento…");
+    try {
+      const r = await uploadReviewsCsv(rid, file);
+      setMsg(`✅ ${r.rows_imported} recensioni importate`);
+    } catch (e: unknown) {
+      setMsg(`❌ ${e instanceof Error ? e.message : "Errore"}`);
+    }
+  }
+
+  async function handleTextUpload() {
+    if (!rid || !reviewText.trim()) return;
+    const lines = reviewText.split("\n").map(l => l.trim()).filter(Boolean);
+    setMsg("Caricamento…");
+    try {
+      const r = await uploadReviewsText(rid, lines);
+      setMsg(`✅ ${r.rows_imported} recensioni importate`);
+      setReviewText("");
+    } catch (e: unknown) {
+      setMsg(`❌ ${e instanceof Error ? e.message : "Errore"}`);
+    }
+  }
+
+  async function handleRunAnalysis() {
+    if (!rid) return;
+    setMsg("Analisi in corso…");
+    try {
+      const r = await runAnalysis(rid, "all");
+      setAnalysis(r);
+      setMsg("✅ Analisi completata");
+      loadAll();
+    } catch (e: unknown) {
+      setMsg(`❌ ${e instanceof Error ? e.message : "Errore"}`);
+    }
+  }
+
+  async function handleRunCorrelation() {
+    if (!rid) return;
+    setMsg("Analisi causale in corso…");
+    try {
+      const r = await runCorrelation(rid);
+      setCorrelations(r.correlations);
+      setMsg(`✅ ${r.correlations.length} correlazioni trovate`);
+    } catch (e: unknown) {
+      setMsg(`❌ ${e instanceof Error ? e.message : "Errore"}`);
+    }
+  }
+
   if (!rid) {
     return (
-      <div className="text-center py-20">
-        <span className="text-5xl">��</span>
+      <div className="text-center py-24">
+        <span className="text-5xl">🍽</span>
         <h2 className="text-xl font-semibold mt-4 text-gray-800">Nessun ristorante selezionato</h2>
         <p className="text-gray-500 mt-2 text-sm">Crea il tuo primo ristorante dal menu in alto.</p>
       </div>
     );
   }
 
-  const isInactive = user?.subscription_status === "inactive";
+  const tomorrow = report?.tomorrow;
+  const allSuggestions = report?.suggestions ?? [];
+  const highSuggestions = allSuggestions.filter(s => s.priority === "high");
+  const unreadAlerts = alerts.filter(a => !a.read);
 
-  // ── Tab: Oggi ──────────────────────────────────────────────────────────────
+  // ── TAB: OGGI ────────────────────────────────────────────────────────────────
   const TabOggi = () => (
     <div className="space-y-6">
-      {/* Covers + top products */}
-      {reportLoading ? (
-        <div className="text-center py-12 text-gray-400">Caricamento…</div>
-      ) : reportError ? (
-        <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 text-sm text-amber-800">
-          {reportError}
-          <div className="mt-3 flex gap-2">
-            <button onClick={() => setTab("dati")} className="text-xs bg-amber-700 text-white px-3 py-1.5 rounded-lg hover:bg-amber-800 transition-colors">
-              Carica dati vendita →
+      {/* Alert banner */}
+      {unreadAlerts.length > 0 && (
+        <div className="bg-red-50 border border-red-200 rounded-xl p-4">
+          <p className="text-sm font-semibold text-red-800 mb-2">🔔 {unreadAlerts.length} alert attivi</p>
+          <div className="space-y-2">
+            {unreadAlerts.slice(0, 2).map(a => (
+              <AlertCard key={a.id} alert={a} onRead={handleMarkRead} />
+            ))}
+            {unreadAlerts.length > 2 && (
+              <button onClick={() => setTab("problemi")} className="text-xs text-red-600 underline">
+                Vedi tutti gli alert →
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Tomorrow forecast */}
+      {tomorrow && (
+        <div>
+          <h2 className="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-3">
+            📅 Domani — {tomorrow.date}
+          </h2>
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+            <div className="bg-white border border-gray-200 rounded-xl p-4 text-center">
+              <p className="text-3xl font-bold text-gray-900">{tomorrow.expected_covers}</p>
+              <p className="text-xs text-gray-500 mt-1">coperti attesi</p>
+            </div>
+            {tomorrow.top_products.slice(0, 2).map(p => (
+              <div key={p.name} className="bg-white border border-gray-200 rounded-xl p-4 text-center">
+                <p className="text-2xl font-bold text-gray-900">~{p.predicted_qty}</p>
+                <p className="text-xs text-gray-500 mt-1">{p.name}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Top actions (high priority only) */}
+      {highSuggestions.length > 0 && (
+        <div>
+          <h2 className="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-3">
+            ⚡ Da fare oggi
+          </h2>
+          <div className="space-y-2">
+            {highSuggestions.slice(0, 3).map((s, i) => <ActionCard key={i} s={s} />)}
+          </div>
+          {allSuggestions.length > highSuggestions.length && (
+            <button onClick={() => setTab("azioni")} className="text-xs text-gray-400 underline mt-2">
+              Vedi tutte le azioni →
             </button>
-          </div>
+          )}
         </div>
-      ) : report ? (
-        <>
-          {/* Tomorrow stats */}
+      )}
+
+      {/* Review sentiment pill */}
+      {report?.review_summary?.sentiment_positive != null && (
+        <div className="flex items-center gap-3 bg-white border border-gray-200 rounded-xl p-4">
+          <span className="text-2xl">⭐</span>
           <div>
-            <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-3">
-              📅 Domani — {report.tomorrow.date}
-            </h2>
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-              <StatCard
-                label="Coperti attesi"
-                value={report.tomorrow.expected_covers}
-                sub="previsione AI"
-              />
-              {report.tomorrow.top_products.slice(0, 2).map(p => (
-                <StatCard
-                  key={p.name}
-                  label={p.name}
-                  value={`~${p.predicted_qty}`}
-                  sub="pezzi previsti"
-                />
-              ))}
-            </div>
+            <p className="text-sm font-medium text-gray-900">
+              {Math.round(report.review_summary.sentiment_positive)}% recensioni positive
+            </p>
+            {report.review_summary.top_issues.length > 0 && (
+              <p className="text-xs text-gray-500 mt-0.5">
+                Problemi: {report.review_summary.top_issues.map(i => i.name).join(", ")}
+              </p>
+            )}
           </div>
+          <button onClick={() => setTab("problemi")} className="ml-auto text-xs text-gray-400 underline">
+            Dettaglio →
+          </button>
+        </div>
+      )}
 
-          {/* Suggestions */}
-          {report.suggestions.length > 0 && (
-            <div>
-              <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-3">
-                ✅ Azioni per oggi
-              </h2>
-              <div className="space-y-2">
-                {report.suggestions.map((s, i) => <SuggestionCard key={i} s={s} />)}
-              </div>
-            </div>
-          )}
+      {loading && !report && (
+        <div className="text-center py-12 text-gray-400 text-sm">Caricamento…</div>
+      )}
 
-          {/* 7-day forecast mini table */}
-          {report.forecast_7days.length > 0 && (
-            <div>
-              <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-3">
-                📈 Previsione 7 giorni
-              </h2>
-              <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
-                <table className="w-full text-sm">
-                  <thead className="bg-gray-50">
-                    <tr>
-                      <th className="text-left px-4 py-2 text-gray-500 font-medium">Data</th>
-                      <th className="text-right px-4 py-2 text-gray-500 font-medium">Coperti</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {report.forecast_7days.map((f, i) => (
-                      <tr key={f.id} className={i % 2 === 0 ? "bg-white" : "bg-gray-50"}>
-                        <td className="px-4 py-2 text-gray-700">{f.date}</td>
-                        <td className="px-4 py-2 text-right font-medium text-gray-900">{f.expected_covers}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          )}
-
-          {/* Review summary */}
-          {report.review_summary.sentiment_positive !== null && (
-            <div>
-              <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-3">
-                ⭐ Sentiment recensioni
-              </h2>
-              <div className="bg-white border border-gray-200 rounded-xl p-4">
-                <div className="flex gap-4 mb-3">
-                  <div className="flex items-center gap-2">
-                    <span className="w-3 h-3 rounded-full bg-green-400 inline-block" />
-                    <span className="text-sm text-gray-700">Positivo: <strong>{Math.round(report.review_summary.sentiment_positive ?? 0)}%</strong></span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <span className="w-3 h-3 rounded-full bg-red-400 inline-block" />
-                    <span className="text-sm text-gray-700">Negativo: <strong>{Math.round(report.review_summary.sentiment_negative ?? 0)}%</strong></span>
-                  </div>
-                </div>
-                {report.review_summary.top_issues.length > 0 && (
-                  <div>
-                    <p className="text-xs text-gray-400 mb-1">Problemi principali:</p>
-                    <div className="flex flex-wrap gap-2">
-                      {report.review_summary.top_issues.map((issue, i) => (
-                        <span key={i} className="text-xs bg-red-50 text-red-700 px-2 py-1 rounded-full">
-                          {issue.name}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
-        </>
-      ) : (
-        <div className="text-center py-12 text-gray-400 text-sm">
-          Nessun dato disponibile. Carica vendite e recensioni per iniziare.
+      {!loading && !report && (
+        <div className="bg-blue-50 border border-blue-200 rounded-xl p-5 text-center">
+          <p className="text-sm font-medium text-blue-800 mb-2">Nessun dato ancora</p>
+          <p className="text-xs text-blue-600 mb-3">Carica le vendite e genera la previsione per vedere i dati di domani.</p>
+          <button onClick={() => setTab("dati")} className="text-xs bg-blue-700 text-white px-3 py-1.5 rounded-lg hover:bg-blue-800 transition-colors">
+            Vai a Dati →
+          </button>
         </div>
       )}
     </div>
   );
 
-  // ── Tab: Recensioni ────────────────────────────────────────────────────────
-  const TabRecensioni = () => (
+  // ── TAB: PROBLEMI ──────────────────────────────────────────────────────────
+  const TabProblemi = () => (
     <div className="space-y-6">
-      {/* Upload CSV */}
-      <div className="bg-white border border-gray-200 rounded-xl p-5">
-        <h3 className="font-semibold text-gray-800 mb-1">📁 Importa da CSV</h3>
-        <p className="text-xs text-gray-500 mb-3">Colonne: date, platform, review_text, rating</p>
-        <label className="inline-flex items-center gap-2 cursor-pointer bg-gray-900 text-white px-4 py-2 rounded-lg text-sm hover:bg-gray-700 transition-colors">
-          <span>Scegli file</span>
-          <input type="file" accept=".csv" className="hidden" onChange={handleReviewCsvUpload} />
-        </label>
+      {/* All alerts */}
+      <div>
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-sm font-semibold text-gray-400 uppercase tracking-wider">🔔 Alert</h2>
+          <button onClick={handleGenerateAlerts} className="text-xs text-gray-400 underline hover:text-gray-600">
+            Rileva nuovi
+          </button>
+        </div>
+        {alerts.length === 0 ? (
+          <p className="text-sm text-gray-400 text-center py-8">Nessun alert. Il sistema monitora automaticamente.</p>
+        ) : (
+          <div className="space-y-2">
+            {alerts.slice(0, 10).map(a => <AlertCard key={a.id} alert={a} onRead={handleMarkRead} />)}
+          </div>
+        )}
       </div>
 
-      {/* Paste text */}
-      <div className="bg-white border border-gray-200 rounded-xl p-5">
-        <h3 className="font-semibold text-gray-800 mb-1">✍️ Incolla recensioni</h3>
-        <p className="text-xs text-gray-500 mb-3">Una recensione per riga</p>
-        <textarea
-          value={reviewText}
-          onChange={e => setReviewText(e.target.value)}
-          rows={5}
-          placeholder={"Ottimo cibo, servizio veloce!\nPiatti freddi, deluso..."}
-          className="w-full border border-gray-200 rounded-lg p-3 text-sm focus:outline-none focus:ring-2 focus:ring-gray-900 resize-none"
-        />
-        <button
-          onClick={handleReviewTextUpload}
-          disabled={!reviewText.trim()}
-          className="mt-2 bg-gray-900 text-white px-4 py-2 rounded-lg text-sm hover:bg-gray-700 disabled:opacity-40 transition-colors"
-        >
-          Importa
-        </button>
-      </div>
-
-      {uploadMsg && (
-        <p className={`text-sm px-3 py-2 rounded-lg ${uploadMsg.startsWith("✅") ? "bg-green-50 text-green-700" : uploadMsg.startsWith("❌") ? "bg-red-50 text-red-700" : "bg-gray-50 text-gray-600"}`}>
-          {uploadMsg}
-        </p>
+      {/* Review issues */}
+      {analysis && analysis.issues.length > 0 && (
+        <div>
+          <h2 className="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-3">
+            ⚠️ Problemi nelle recensioni
+          </h2>
+          <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
+            {analysis.issues.map((issue, i) => (
+              <div key={i} className={`flex items-center justify-between px-4 py-3 ${i > 0 ? "border-t border-gray-100" : ""}`}>
+                <span className="text-sm text-gray-800">{issue.name}</span>
+                <span className="text-xs bg-red-50 text-red-700 px-2 py-0.5 rounded-full">{issue.frequency}x</span>
+              </div>
+            ))}
+          </div>
+        </div>
       )}
 
-      {/* Analysis */}
-      <div className="bg-white border border-gray-200 rounded-xl p-5">
-        <h3 className="font-semibold text-gray-800 mb-1">🤖 Analisi AI</h3>
-        <p className="text-xs text-gray-500 mb-3">Analizza tutte le recensioni e genera insight</p>
-        <button
-          onClick={handleRunAnalysis}
-          disabled={analysisLoading || isInactive}
-          className="bg-gray-900 text-white px-4 py-2 rounded-lg text-sm hover:bg-gray-700 disabled:opacity-40 transition-colors"
-        >
-          {analysisLoading ? "Analisi in corso…" : "Esegui analisi"}
-        </button>
-        {isInactive && (
-          <p className="text-xs text-amber-600 mt-2">
-            Piano scaduto. <Link href="/billing" className="underline">Attiva il piano →</Link>
-          </p>
-        )}
-        {analysisMsg && (
-          <p className={`text-sm mt-2 ${analysisMsg.startsWith("✅") ? "text-green-600" : analysisMsg.startsWith("❌") ? "text-red-600" : "text-gray-500"}`}>
-            {analysisMsg}
-          </p>
-        )}
-      </div>
-
-      {/* Analysis results */}
-      {analysis && (
-        <div className="space-y-4">
-          {/* Sentiment */}
-          <div className="bg-white border border-gray-200 rounded-xl p-5">
-            <h3 className="font-semibold text-gray-800 mb-3">Sentiment</h3>
-            <div className="flex gap-6 mb-3 text-sm">
-              <span className="text-green-600 font-semibold">✅ {Math.round(analysis.sentiment.positive_percentage)}% positivo</span>
-              <span className="text-red-600 font-semibold">❌ {Math.round(analysis.sentiment.negative_percentage)}% negativo</span>
-              <span className="text-gray-400">{Math.round(100 - analysis.sentiment.positive_percentage - analysis.sentiment.negative_percentage)}% neutro</span>
-            </div>
-            <div className="h-2 rounded-full bg-gray-100 overflow-hidden flex">
-              <div className="bg-green-400 h-full" style={{ width: `${analysis.sentiment.positive_percentage}%` }} />
-              <div className="bg-gray-200 h-full" style={{ width: `${100 - analysis.sentiment.positive_percentage - analysis.sentiment.negative_percentage}%` }} />
-              <div className="bg-red-400 h-full" style={{ width: `${analysis.sentiment.negative_percentage}%` }} />
-            </div>
+      {/* Correlations (causal analysis) */}
+      {correlations.length > 0 && (
+        <div>
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-sm font-semibold text-gray-400 uppercase tracking-wider">🔍 Analisi causale</h2>
+            <button onClick={handleRunCorrelation} className="text-xs text-gray-400 underline">Aggiorna</button>
           </div>
-
-          {/* Issues */}
-          {analysis.issues.length > 0 && (
-            <div className="bg-white border border-gray-200 rounded-xl p-5">
-              <h3 className="font-semibold text-gray-800 mb-3">⚠️ Problemi ({analysis.issues.length})</h3>
-              <div className="space-y-2">
-                {analysis.issues.map((issue, i) => (
-                  <div key={i} className="flex items-center justify-between">
-                    <span className="text-sm text-gray-700">{issue.name}</span>
-                    <span className="text-xs bg-red-50 text-red-700 px-2 py-0.5 rounded-full">{issue.frequency}x</span>
-                  </div>
-                ))}
+          <div className="space-y-3">
+            {correlations.map((c, i) => (
+              <div key={i} className="bg-white border border-gray-200 rounded-xl p-4">
+                <div className="flex items-center gap-2 mb-2">
+                  <span className="text-xs font-semibold text-gray-500 uppercase">Causa:</span>
+                  <span className="text-sm text-gray-900">{c.cause}</span>
+                  <span className="ml-auto text-xs text-gray-400">{Math.round(c.confidence * 100)}% confidenza</span>
+                </div>
+                <p className="text-sm text-gray-700 leading-snug">{c.suggestion}</p>
               </div>
-            </div>
-          )}
+            ))}
+          </div>
+        </div>
+      )}
 
-          {/* Strengths */}
-          {analysis.strengths.length > 0 && (
-            <div className="bg-white border border-gray-200 rounded-xl p-5">
-              <h3 className="font-semibold text-gray-800 mb-3">💪 Punti di forza ({analysis.strengths.length})</h3>
-              <div className="space-y-2">
-                {analysis.strengths.map((s, i) => (
-                  <div key={i} className="flex items-center justify-between">
-                    <span className="text-sm text-gray-700">{s.name}</span>
-                    <span className="text-xs bg-green-50 text-green-700 px-2 py-0.5 rounded-full">{s.frequency}x</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Suggestions */}
-          {analysis.suggestions.length > 0 && (
-            <div className="bg-white border border-gray-200 rounded-xl p-5">
-              <h3 className="font-semibold text-gray-800 mb-3">🎯 Suggerimenti operativi</h3>
-              <ol className="space-y-3">
-                {analysis.suggestions.map((s, i) => (
-                  <li key={i} className="flex gap-3 text-sm text-gray-700">
-                    <span className="shrink-0 w-6 h-6 bg-gray-100 text-gray-500 rounded-full flex items-center justify-center text-xs font-bold">{i + 1}</span>
-                    <div>
-                      <span className="font-medium text-gray-900">{s.problem}</span>
-                      <span className="text-gray-400 mx-1">→</span>
-                      {s.action}
-                    </div>
-                  </li>
-                ))}
-              </ol>
-            </div>
-          )}
+      {!analysis && correlations.length === 0 && (
+        <div className="text-center py-10">
+          <p className="text-sm text-gray-400">Carica recensioni e avvia l'analisi per vedere i problemi.</p>
+          <button onClick={() => setTab("dati")} className="mt-3 text-xs text-gray-500 underline">Vai a Dati →</button>
         </div>
       )}
     </div>
   );
 
-  // ── Tab: Dati ──────────────────────────────────────────────────────────────
+  // ── TAB: AZIONI ────────────────────────────────────────────────────────────
+  const TabAzioni = () => (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between mb-2">
+        <h2 className="text-sm font-semibold text-gray-400 uppercase tracking-wider">✅ Tutte le azioni suggerite</h2>
+        <span className="text-xs text-gray-400">{allSuggestions.length} azioni</span>
+      </div>
+
+      {allSuggestions.length === 0 ? (
+        <div className="text-center py-12">
+          <p className="text-sm text-gray-400">Nessuna azione suggerita. Aggiorna i dati di vendita e la previsione.</p>
+          <button onClick={() => setTab("dati")} className="mt-3 text-xs text-gray-500 underline">Vai a Dati →</button>
+        </div>
+      ) : (
+        <>
+          {allSuggestions.map((s, i) => <ActionCard key={i} s={s} />)}
+
+          {/* Run correlation button */}
+          <div className="pt-2 border-t border-gray-100">
+            <button
+              onClick={handleRunCorrelation}
+              className="text-sm text-gray-600 hover:text-gray-900 underline"
+            >
+              🔍 Esegui analisi causale avanzata
+            </button>
+            <p className="text-xs text-gray-400 mt-0.5">
+              Combina dati vendite + recensioni per trovare le cause dei problemi
+            </p>
+          </div>
+        </>
+      )}
+    </div>
+  );
+
+  // ── TAB: DATI ──────────────────────────────────────────────────────────────
   const TabDati = () => (
     <div className="space-y-6">
       {/* Sales upload */}
       <div className="bg-white border border-gray-200 rounded-xl p-5">
-        <h3 className="font-semibold text-gray-800 mb-1">📊 Importa vendite (CSV)</h3>
-        <p className="text-xs text-gray-500 mb-3">Colonne richieste: <code className="bg-gray-100 px-1 rounded">date, product, quantity</code> — opzionale: revenue</p>
-        <label className="inline-flex items-center gap-2 cursor-pointer bg-gray-900 text-white px-4 py-2 rounded-lg text-sm hover:bg-gray-700 transition-colors">
-          <span>Scegli file CSV</span>
+        <h3 className="font-semibold text-gray-800 mb-1">📊 Importa vendite</h3>
+        <p className="text-xs text-gray-500 mb-3">CSV con colonne: <code className="bg-gray-100 px-1 rounded">date, product, quantity</code></p>
+        <label className="inline-flex cursor-pointer bg-gray-900 text-white px-4 py-2 rounded-lg text-sm hover:bg-gray-700 transition-colors">
+          Scegli file CSV
           <input type="file" accept=".csv" className="hidden" onChange={handleSalesCsvUpload} />
         </label>
       </div>
 
-      {/* Generate forecast */}
+      {/* Forecast */}
       <div className="bg-white border border-gray-200 rounded-xl p-5">
         <h3 className="font-semibold text-gray-800 mb-1">🔮 Genera previsione</h3>
         <p className="text-xs text-gray-500 mb-3">Analizza le vendite storiche e prevede i prossimi 7 giorni</p>
-        <button
-          onClick={handleGenerateForecast}
-          className="bg-gray-900 text-white px-4 py-2 rounded-lg text-sm hover:bg-gray-700 transition-colors"
-        >
+        <button onClick={handleGenerateForecast} disabled={!canForecast} className="bg-gray-900 text-white px-4 py-2 rounded-lg text-sm hover:bg-gray-700 disabled:opacity-40 transition-colors">
           Genera previsione
         </button>
       </div>
 
-      {salesMsg && (
-        <p className={`text-sm px-3 py-2 rounded-lg ${salesMsg.startsWith("✅") ? "bg-green-50 text-green-700" : salesMsg.startsWith("❌") ? "bg-red-50 text-red-700" : "bg-gray-50 text-gray-600"}`}>
-          {salesMsg}
-        </p>
-      )}
+      {/* Reviews */}
+      <div className="bg-white border border-gray-200 rounded-xl p-5">
+        <h3 className="font-semibold text-gray-800 mb-1">⭐ Importa recensioni</h3>
+        <div className="flex gap-2 mb-3">
+          <label className="inline-flex cursor-pointer text-xs border border-gray-300 text-gray-700 px-3 py-1.5 rounded-lg hover:bg-gray-50 transition-colors">
+            CSV
+            <input type="file" accept=".csv" className="hidden" onChange={handleReviewCsvUpload} />
+          </label>
+        </div>
+        <textarea
+          value={reviewText}
+          onChange={e => setReviewText(e.target.value)}
+          rows={4}
+          placeholder={"Incolla recensioni — una per riga\n\nOttimo cibo!\nServizio lento purtroppo..."}
+          className="w-full border border-gray-200 rounded-lg p-3 text-sm focus:outline-none focus:ring-2 focus:ring-gray-900 resize-none"
+        />
+        <div className="flex items-center gap-3 mt-2">
+          <button onClick={handleTextUpload} disabled={!reviewText.trim()} className="text-sm bg-gray-900 text-white px-3 py-1.5 rounded-lg disabled:opacity-40 hover:bg-gray-700 transition-colors">
+            Importa
+          </button>
+          <button onClick={handleRunAnalysis} disabled={isInactive} className="text-sm border border-gray-300 text-gray-700 px-3 py-1.5 rounded-lg disabled:opacity-40 hover:bg-gray-50 transition-colors">
+            🤖 Analizza
+          </button>
+          {isInactive && <Link href="/billing" className="text-xs text-amber-600 underline">Attiva piano →</Link>}
+        </div>
+      </div>
 
-      {/* Link to products setup */}
+      {/* Setup link */}
       <div className="bg-blue-50 border border-blue-200 rounded-xl p-4">
-        <p className="text-sm text-blue-800 font-medium mb-1">🛒 Configura prodotti e ingredienti</p>
-        <p className="text-xs text-blue-600">Mappa i tuoi prodotti agli ingredienti per ricevere suggerimenti automatici sulle forniture.</p>
+        <p className="text-sm font-medium text-blue-800">🛒 Prodotti e ingredienti</p>
+        <p className="text-xs text-blue-600 mt-0.5">Mappa i prodotti agli ingredienti per suggerimenti automatici sulle forniture.</p>
         <Link href="/setup" className="inline-block mt-2 text-xs bg-blue-700 text-white px-3 py-1.5 rounded-lg hover:bg-blue-800 transition-colors">
           Configura →
         </Link>
+      </div>
+
+      {/* Integrations link */}
+      <div className="bg-purple-50 border border-purple-200 rounded-xl p-4">
+        <div className="flex items-center gap-2 mb-1">
+          <p className="text-sm font-medium text-purple-800">⚡ Integrazioni automatiche</p>
+          {plan !== "premium" && <Badge text="Premium" cls="bg-purple-100 text-purple-700 border-purple-200" />}
+        </div>
+        <p className="text-xs text-purple-600">Connetti il tuo POS (Square, Toast) per importare le vendite automaticamente ogni ora.</p>
+        {plan === "premium" ? (
+          <Link href="/integrations" className="inline-block mt-2 text-xs bg-purple-700 text-white px-3 py-1.5 rounded-lg hover:bg-purple-800 transition-colors">
+            Gestisci integrazioni →
+          </Link>
+        ) : (
+          <Link href="/billing" className="inline-block mt-2 text-xs bg-purple-700 text-white px-3 py-1.5 rounded-lg hover:bg-purple-800 transition-colors">
+            Passa a Premium →
+          </Link>
+        )}
       </div>
     </div>
   );
@@ -477,29 +480,48 @@ export default function DashboardPage() {
   return (
     <div>
       {/* Header */}
-      <div className="mb-6">
-        <h1 className="text-2xl font-bold text-gray-900">{activeRestaurant?.name}</h1>
-        <p className="text-sm text-gray-500 mt-1">Report operativo • {new Date().toLocaleDateString("it-IT", { weekday: "long", day: "numeric", month: "long" })}</p>
+      <div className="flex items-start justify-between mb-6">
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900">{activeRestaurant?.name}</h1>
+          <p className="text-sm text-gray-400 mt-0.5">
+            {new Date().toLocaleDateString("it-IT", { weekday: "long", day: "numeric", month: "long" })}
+          </p>
+        </div>
+        {unread > 0 && (
+          <button onClick={() => setTab("problemi")} className="flex items-center gap-1.5 bg-red-500 text-white text-xs font-medium px-3 py-1.5 rounded-full hover:bg-red-600 transition-colors">
+            🔔 {unread} alert
+          </button>
+        )}
       </div>
 
-      {/* Tab navigation */}
+      {/* Status message */}
+      {msg && (
+        <div className={`text-sm px-3 py-2 rounded-lg mb-4 ${msg.startsWith("✅") ? "bg-green-50 text-green-700" : msg.startsWith("❌") ? "bg-red-50 text-red-700" : "bg-gray-50 text-gray-600"}`}>
+          {msg}
+        </div>
+      )}
+
+      {/* Tabs */}
       <div className="flex gap-1 bg-gray-100 p-1 rounded-xl mb-6 w-fit">
-        {(["oggi", "recensioni", "dati"] as const).map(t => (
+        {[
+          { id: "oggi", label: "📊 Oggi" },
+          { id: "problemi", label: unread > 0 ? `⚠️ Problemi (${unread})` : "⚠️ Problemi" },
+          { id: "azioni", label: "✅ Azioni" },
+          { id: "dati", label: "📈 Dati" },
+        ].map(t => (
           <button
-            key={t}
-            onClick={() => setTab(t)}
-            className={`px-4 py-2 text-sm font-medium rounded-lg transition-colors capitalize ${
-              tab === t ? "bg-white text-gray-900 shadow-sm" : "text-gray-500 hover:text-gray-700"
-            }`}
+            key={t.id}
+            onClick={() => setTab(t.id as typeof tab)}
+            className={`px-3 py-2 text-sm font-medium rounded-lg transition-colors ${tab === t.id ? "bg-white text-gray-900 shadow-sm" : "text-gray-500 hover:text-gray-700"}`}
           >
-            {t === "oggi" ? "📊 Oggi" : t === "recensioni" ? "⭐ Recensioni" : "📈 Dati"}
+            {t.label}
           </button>
         ))}
       </div>
 
-      {/* Tab content */}
       {tab === "oggi" && <TabOggi />}
-      {tab === "recensioni" && <TabRecensioni />}
+      {tab === "problemi" && <TabProblemi />}
+      {tab === "azioni" && <TabAzioni />}
       {tab === "dati" && <TabDati />}
     </div>
   );

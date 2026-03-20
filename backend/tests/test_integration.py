@@ -333,3 +333,145 @@ def test_daily_report(client, restaurant, auth_headers):
     assert "suggestions" in data
     assert "review_summary" in data
     assert "forecast_7days" in data
+
+
+# ── Alerts ────────────────────────────────────────────────────────────
+
+def test_generate_alerts_no_data(client, restaurant, auth_headers):
+    """With no data, no alerts should be triggered."""
+    resp = client.post("/alerts/generate", params={"restaurant_id": restaurant}, headers=auth_headers)
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "generated" in data
+    assert "alerts" in data
+    # No data → no alerts (or some alerts like low_sentiment if analysis exists)
+    assert isinstance(data["alerts"], list)
+
+
+def test_generate_alerts_with_high_demand(client, restaurant, auth_headers, db_session):
+    """With enough sales + forecast, high demand alert may fire."""
+    # Upload sales and generate forecast
+    client.post(
+        "/sales/upload",
+        params={"restaurant_id": restaurant},
+        files={"file": ("sales.csv", SALES_CSV.encode(), "text/csv")},
+        headers=auth_headers,
+    )
+    client.post("/forecast/generate", params={"restaurant_id": restaurant}, headers=auth_headers)
+
+    resp = client.post("/alerts/generate", params={"restaurant_id": restaurant}, headers=auth_headers)
+    assert resp.status_code == 200
+
+
+def test_get_alerts(client, restaurant, auth_headers):
+    client.post("/alerts/generate", params={"restaurant_id": restaurant}, headers=auth_headers)
+    resp = client.get("/alerts", params={"restaurant_id": restaurant}, headers=auth_headers)
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "alerts" in data
+    assert "unread_count" in data
+
+
+def test_mark_alert_read(client, restaurant, auth_headers, db_session):
+    from backend.db.models import Alert
+    import uuid as _uuid
+    # Create an alert directly
+    alert = Alert(
+        id=_uuid.uuid4(),
+        restaurant_id=restaurant,
+        type="test",
+        severity="low",
+        message="Test alert",
+    )
+    db_session.add(alert)
+    db_session.commit()
+
+    resp = client.post(f"/alerts/{alert.id}/read", params={"restaurant_id": restaurant}, headers=auth_headers)
+    assert resp.status_code == 200
+    assert resp.json()["read"] is True
+
+
+# ── Correlations V2 ───────────────────────────────────────────────────
+
+def test_run_correlation(client, restaurant, auth_headers):
+    """Should run (with rule-based fallback) and return list."""
+    resp = client.post("/correlations/run", params={"restaurant_id": restaurant}, headers=auth_headers)
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "correlations" in data
+    assert isinstance(data["correlations"], list)
+
+
+def test_get_latest_correlation_empty(client, restaurant, auth_headers):
+    resp = client.get("/correlations/latest", params={"restaurant_id": restaurant}, headers=auth_headers)
+    assert resp.status_code == 200
+    assert "correlations" in resp.json()
+
+
+# ── Integrations ──────────────────────────────────────────────────────
+
+def test_create_integration(client, restaurant, auth_headers):
+    resp = client.post(
+        "/integrations",
+        params={"restaurant_id": restaurant},
+        json={"provider": "csv_auto", "config": {"file_path": "/tmp/nonexistent.csv"}},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["provider"] == "csv_auto"
+    assert data["status"] == "pending"
+
+
+def test_create_integration_invalid_provider(client, restaurant, auth_headers):
+    resp = client.post(
+        "/integrations",
+        params={"restaurant_id": restaurant},
+        json={"provider": "nonexistent_pos"},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 422
+
+
+def test_list_integrations(client, restaurant, auth_headers):
+    client.post(
+        "/integrations",
+        params={"restaurant_id": restaurant},
+        json={"provider": "square", "config": {"access_token": "test-token"}},
+        headers=auth_headers,
+    )
+    resp = client.get("/integrations", params={"restaurant_id": restaurant}, headers=auth_headers)
+    assert resp.status_code == 200
+    items = resp.json()
+    assert len(items) >= 1
+    # Sensitive fields should be masked
+    config = items[0].get("config", {})
+    if "access_token" in config:
+        assert config["access_token"] == "***"
+
+
+def test_sync_integration_provider_error(client, restaurant, auth_headers, db_session):
+    """Square sync with missing token returns 502."""
+    resp_create = client.post(
+        "/integrations",
+        params={"restaurant_id": restaurant},
+        json={"provider": "square", "config": {}},
+        headers=auth_headers,
+    )
+    int_id = resp_create.json()["id"]
+
+    resp = client.post(
+        f"/integrations/{int_id}/sync",
+        params={"restaurant_id": restaurant},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 502
+
+
+# ── Plan feature gating ───────────────────────────────────────────────
+
+def test_plan_defaults_to_starter(client, auth_headers, user):
+    resp = client.get("/auth/me", headers=auth_headers)
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "plan" in data

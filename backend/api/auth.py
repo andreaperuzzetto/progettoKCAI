@@ -46,6 +46,7 @@ class UserOut(BaseModel):
     user_id: uuid.UUID
     email: str
     subscription_status: str
+    plan: str
     restaurants: list[RestaurantOut]
 
 
@@ -98,6 +99,7 @@ def me(current_user: User = Depends(get_current_user), db: Session = Depends(get
         user_id=current_user.id,
         email=current_user.email,
         subscription_status=current_user.subscription_status,
+        plan=getattr(current_user, "plan", "starter") or "starter",
         restaurants=[RestaurantOut.model_validate(r) for r in restaurants],
     )
 

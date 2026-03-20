@@ -59,6 +59,7 @@ def user(db_session):
         email="test@example.com",
         password_hash=hash_password("testpassword"),
         subscription_status="active",
+        plan="premium",
     )
     db_session.add(u)
     db_session.commit()
