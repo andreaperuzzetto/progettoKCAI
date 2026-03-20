@@ -1,15 +1,22 @@
 import uuid
+from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, EmailStr
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 from sqlalchemy.orm import Session
 
 from backend.auth.dependencies import get_current_user
 from backend.auth.utils import create_access_token, hash_password, verify_password
 from backend.db.database import get_db
 from backend.db.models import Restaurant, User
+from backend.services.usage_service import log_action
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+_limiter = Limiter(key_func=get_remote_address)
+
+TRIAL_DAYS = 7
 
 
 # --- Schemas ---
@@ -38,6 +45,7 @@ class RestaurantOut(BaseModel):
 class UserOut(BaseModel):
     user_id: uuid.UUID
     email: str
+    subscription_status: str
     restaurants: list[RestaurantOut]
 
 
@@ -49,34 +57,47 @@ def register(payload: RegisterRequest, db: Session = Depends(get_db)):
     if existing:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email already registered")
 
+    trial_ends = datetime.now(timezone.utc) + timedelta(days=TRIAL_DAYS)
     user = User(
         email=payload.email,
         password_hash=hash_password(payload.password),
+        subscription_status="trial",
+        trial_ends_at=trial_ends,
     )
     db.add(user)
     db.commit()
     db.refresh(user)
 
+    log_action(user.id, "register", db)
     token = create_access_token({"sub": str(user.id)})
     return {"access_token": token, "token_type": "bearer"}
 
 
 @router.post("/login")
-def login(payload: LoginRequest, db: Session = Depends(get_db)):
+@_limiter.limit("5/minute")
+def login(request: Request, payload: LoginRequest, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.email == payload.email).first()
     if not user or not verify_password(payload.password, user.password_hash):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
 
+    # Expire trial if needed
+    if user.subscription_status == "trial" and user.trial_ends_at:
+        if datetime.now(timezone.utc) > user.trial_ends_at.replace(tzinfo=timezone.utc):
+            user.subscription_status = "inactive"
+            db.commit()
+
+    log_action(user.id, "login", db)
     token = create_access_token({"sub": str(user.id)})
     return {"access_token": token, "token_type": "bearer"}
 
 
-@router.get("/me", response_model=UserOut)
+@router.get("/me")
 def me(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     restaurants = db.query(Restaurant).filter(Restaurant.owner_user_id == current_user.id).all()
     return UserOut(
         user_id=current_user.id,
         email=current_user.email,
+        subscription_status=current_user.subscription_status,
         restaurants=[RestaurantOut.model_validate(r) for r in restaurants],
     )
 

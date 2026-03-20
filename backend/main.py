@@ -2,19 +2,20 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
 
+from backend.config import settings
 from backend.db.database import engine
 from backend.db.models import Base
-from backend.config import settings
 
 from backend.api.auth import router as auth_router
 from backend.api.health import router as health_router
-from backend.api.sales import router as sales_router
+from backend.api.restaurants import router as restaurants_router
 from backend.api.reviews import router as reviews_router
-from backend.api.forecast import router as forecast_router
-from backend.api.review_analysis import router as review_analysis_router
-from backend.api.correlation import router as correlation_router
-from backend.api.daily_report import router as daily_report_router
+from backend.api.analysis import router as analysis_router
+from backend.api.billing import router as billing_router
 
 
 @asynccontextmanager
@@ -23,10 +24,11 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(
-    title=settings.app_name,
-    lifespan=lifespan
-)
+limiter = Limiter(key_func=get_remote_address)
+
+app = FastAPI(title=settings.app_name, lifespan=lifespan)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 app.add_middleware(
     CORSMiddleware,
@@ -37,9 +39,7 @@ app.add_middleware(
 
 app.include_router(auth_router)
 app.include_router(health_router)
-app.include_router(sales_router)
+app.include_router(restaurants_router)
 app.include_router(reviews_router)
-app.include_router(forecast_router)
-app.include_router(review_analysis_router)
-app.include_router(correlation_router)
-app.include_router(daily_report_router)
+app.include_router(analysis_router)
+app.include_router(billing_router)

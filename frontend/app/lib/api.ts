@@ -20,7 +20,7 @@ function authHeaders(): Record<string, string> {
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
-// ── Auth API ────────────────────────────────────────────────────────
+// ── Auth ────────────────────────────────────────────────────────────
 
 export interface RestaurantInfo {
   id: string;
@@ -30,6 +30,7 @@ export interface RestaurantInfo {
 export interface UserContext {
   user_id: string;
   email: string;
+  subscription_status: "active" | "inactive" | "trial";
   restaurants: RestaurantInfo[];
 }
 
@@ -60,9 +61,7 @@ export async function login(email: string, password: string): Promise<{ access_t
 }
 
 export async function fetchMe(): Promise<UserContext> {
-  const res = await fetch(`${API_BASE}/auth/me`, {
-    headers: authHeaders(),
-  });
+  const res = await fetch(`${API_BASE}/auth/me`, { headers: authHeaders() });
   if (!res.ok) throw new Error("Not authenticated");
   return res.json();
 }
@@ -80,52 +79,95 @@ export async function createRestaurant(name: string): Promise<RestaurantInfo> {
   return res.json();
 }
 
-// ── Operational API ─────────────────────────────────────────────────
+// ── Reviews ─────────────────────────────────────────────────────────
 
-export async function fetchDailyReport(restaurantId: string, targetDate: string) {
-  const params = new URLSearchParams({ restaurant_id: restaurantId, target_date: targetDate });
-  const res = await fetch(`${API_BASE}/daily-report?${params}`, { headers: authHeaders() });
-  if (!res.ok) throw new Error("Failed to fetch daily report");
-  return res.json();
-}
-
-export async function fetchReviewAnalysis(restaurantId: string) {
-  const params = new URLSearchParams({ restaurant_id: restaurantId });
-  const res = await fetch(`${API_BASE}/review-analysis?${params}`, { headers: authHeaders() });
-  if (!res.ok) throw new Error("Failed to fetch review analysis");
-  return res.json();
-}
-
-export async function fetchCorrelation(restaurantId: string) {
-  const params = new URLSearchParams({ restaurant_id: restaurantId });
-  const res = await fetch(`${API_BASE}/correlation?${params}`, { headers: authHeaders() });
-  if (!res.ok) throw new Error("Failed to fetch correlation");
-  return res.json();
-}
-
-export async function uploadSales(restaurantId: string, file: File) {
+export async function uploadReviewsCsv(restaurantId: string, file: File) {
   const params = new URLSearchParams({ restaurant_id: restaurantId });
   const form = new FormData();
   form.append("file", file);
-  const res = await fetch(`${API_BASE}/upload-sales?${params}`, {
+  const res = await fetch(`${API_BASE}/reviews/upload?${params}`, {
     method: "POST",
     headers: authHeaders(),
     body: form,
   });
-  if (!res.ok) throw new Error("Failed to upload sales");
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail ?? "Failed to upload reviews");
+  }
   return res.json();
 }
 
-export async function uploadReviews(restaurantId: string, file: File) {
+export async function uploadReviewsText(restaurantId: string, reviews: string[]) {
   const params = new URLSearchParams({ restaurant_id: restaurantId });
-  const form = new FormData();
-  form.append("file", file);
-  const res = await fetch(`${API_BASE}/upload-reviews?${params}`, {
+  const res = await fetch(`${API_BASE}/reviews/upload-text?${params}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify({ reviews }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail ?? "Failed to upload reviews");
+  }
+  return res.json();
+}
+
+// ── Analysis ─────────────────────────────────────────────────────────
+
+export interface Issue {
+  name: string;
+  frequency: number;
+}
+
+export interface Suggestion {
+  problem: string;
+  action: string;
+}
+
+export interface AnalysisData {
+  id: string;
+  period: string;
+  sentiment: {
+    positive_percentage: number;
+    negative_percentage: number;
+  };
+  issues: Issue[];
+  strengths: Issue[];
+  suggestions: Suggestion[];
+  created_at: string;
+}
+
+export async function runAnalysis(restaurantId: string, period = "all"): Promise<AnalysisData> {
+  const params = new URLSearchParams({ restaurant_id: restaurantId, period });
+  const res = await fetch(`${API_BASE}/analysis/run?${params}`, {
     method: "POST",
     headers: authHeaders(),
-    body: form,
   });
-  if (!res.ok) throw new Error("Failed to upload reviews");
-  return res.json();
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail ?? "Analysis failed");
+  }
+  const data = await res.json();
+  return data as AnalysisData;
 }
 
+export async function fetchLatestAnalysis(restaurantId: string): Promise<AnalysisData | null> {
+  const params = new URLSearchParams({ restaurant_id: restaurantId });
+  const res = await fetch(`${API_BASE}/analysis/latest?${params}`, { headers: authHeaders() });
+  if (!res.ok) throw new Error("Failed to fetch analysis");
+  const data = await res.json();
+  return data.analysis ?? null;
+}
+
+// ── Billing ──────────────────────────────────────────────────────────
+
+export async function createCheckoutSession(): Promise<{ checkout_url: string }> {
+  const res = await fetch(`${API_BASE}/billing/checkout`, {
+    method: "POST",
+    headers: authHeaders(),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail ?? "Billing error");
+  }
+  return res.json();
+}

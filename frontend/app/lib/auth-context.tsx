@@ -26,7 +26,7 @@ interface AuthContextValue {
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
-const PUBLIC_PATHS = ["/login", "/register"];
+const PUBLIC_PATHS = ["/login", "/register", "/billing"];
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<UserContext | null>(null);
@@ -43,10 +43,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     try {
       const me = await fetchMe();
       setUser(me);
-      setActiveRestaurant((prev) => {
-        if (prev) return prev;
-        return me.restaurants[0] ?? null;
-      });
+      setActiveRestaurant((prev) => prev ?? me.restaurants[0] ?? null);
     } catch {
       clearToken();
       setUser(null);
@@ -55,19 +52,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
-  useEffect(() => {
-    loadUser();
-  }, [loadUser]);
+  useEffect(() => { loadUser(); }, [loadUser]);
 
   useEffect(() => {
     if (isLoading) return;
-    const isPublic = PUBLIC_PATHS.includes(pathname);
-    if (!user && !isPublic) {
-      router.push("/login");
-    }
-    if (user && isPublic) {
-      router.push("/");
-    }
+    const isPublic = PUBLIC_PATHS.some(p => pathname.startsWith(p));
+    if (!user && !isPublic) router.push("/login");
+    if (user && (pathname === "/login" || pathname === "/register")) router.push("/");
   }, [user, isLoading, pathname, router]);
 
   async function login(email: string, password: string) {
@@ -104,9 +95,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <AuthContext.Provider
-      value={{ user, activeRestaurant, isLoading, login, register, logout, selectRestaurant, refreshUser }}
-    >
+    <AuthContext.Provider value={{ user, activeRestaurant, isLoading, login, register, logout, selectRestaurant, refreshUser }}>
       {children}
     </AuthContext.Provider>
   );
