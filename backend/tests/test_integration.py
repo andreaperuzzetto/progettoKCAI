@@ -475,3 +475,178 @@ def test_plan_defaults_to_starter(client, auth_headers, user):
     assert resp.status_code == 200
     data = resp.json()
     assert "plan" in data
+
+
+# ── Phase 5: Organizations ─────────────────────────────────────────────────────
+
+def test_create_organization(client, auth_headers):
+    resp = client.post("/organizations", json={"name": "My Restaurant Group"}, headers=auth_headers)
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["name"] == "My Restaurant Group"
+    assert "id" in data
+
+
+def test_get_my_org(client, auth_headers):
+    client.post("/organizations", json={"name": "Gruppo Test"}, headers=auth_headers)
+    resp = client.get("/organizations/me", headers=auth_headers)
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["name"] == "Gruppo Test"
+    assert "your_role" in data
+    assert data["your_role"] == "admin"
+
+
+def test_get_my_org_no_org(client, auth_headers):
+    resp = client.get("/organizations/me", headers=auth_headers)
+    assert resp.status_code == 404
+
+
+def test_compare_no_org(client, auth_headers):
+    resp = client.get("/organizations/compare", headers=auth_headers)
+    assert resp.status_code == 404
+
+
+def test_compare_single_location(client, auth_headers, restaurant):
+    client.post("/organizations", json={"name": "Group"}, headers=auth_headers)
+    client.post(f"/organizations/restaurants/{restaurant}", headers=auth_headers)
+    resp = client.get("/organizations/compare", headers=auth_headers)
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "message" in data  # not enough locations
+
+
+def test_benchmark_no_city(client, auth_headers, restaurant):
+    resp = client.get(f"/organizations/benchmark?restaurant_id={restaurant}", headers=auth_headers)
+    assert resp.status_code == 200
+    assert "message" in resp.json()
+
+
+# ── Phase 5: Insights ──────────────────────────────────────────────────────────
+
+def test_generate_insights_empty(client, auth_headers, restaurant):
+    resp = client.post(f"/insights/generate?restaurant_id={restaurant}", headers=auth_headers)
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "insights" in data
+    assert isinstance(data["insights"], list)
+
+
+def test_get_insights_latest(client, auth_headers, restaurant):
+    client.post(f"/insights/generate?restaurant_id={restaurant}", headers=auth_headers)
+    resp = client.get(f"/insights/latest?restaurant_id={restaurant}", headers=auth_headers)
+    assert resp.status_code == 200
+    assert "insights" in resp.json()
+
+
+# ── Phase 5: Menu Optimization ────────────────────────────────────────────────
+
+def _menu_csv():
+    from datetime import date, timedelta
+    today = date.today()
+    rows = []
+    for d in [today - timedelta(days=i) for i in range(1, 4)]:
+        rows.append(f"{d},Pizza Margherita,20,200")
+        rows.append(f"{d},Tiramisu,5,40")
+        rows.append(f"{d},Acqua,30,30")
+    return "date,product,quantity,revenue\n" + "\n".join(rows) + "\n"
+
+
+SALES_CSV_MENU = _menu_csv()
+
+
+def test_menu_analyze_no_data(client, auth_headers, restaurant):
+    resp = client.post(f"/menu/analyze?restaurant_id={restaurant}", headers=auth_headers)
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "suggestions" in data
+
+
+def test_menu_analyze_with_data(client, auth_headers, restaurant):
+    client.post(
+        "/sales/upload",
+        params={"restaurant_id": restaurant},
+        files={"file": ("sales.csv", SALES_CSV_MENU.encode(), "text/csv")},
+        headers=auth_headers,
+    )
+    resp = client.post(f"/menu/analyze?restaurant_id={restaurant}", headers=auth_headers)
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data["suggestions"]) > 0
+    # Each suggestion has required fields
+    for s in data["suggestions"]:
+        assert "product" in s
+        assert "action" in s
+        assert "reason" in s
+
+
+def test_menu_metrics(client, auth_headers, restaurant):
+    client.post(
+        "/sales/upload",
+        params={"restaurant_id": restaurant},
+        files={"file": ("sales.csv", SALES_CSV_MENU.encode(), "text/csv")},
+        headers=auth_headers,
+    )
+    resp = client.get(f"/menu/metrics?restaurant_id={restaurant}", headers=auth_headers)
+    assert resp.status_code == 200
+    assert resp.json()["count"] > 0
+
+
+# ── Phase 5: Operations ───────────────────────────────────────────────────────
+
+def test_purchase_order_no_forecast(client, auth_headers, restaurant):
+    resp = client.post(f"/operations/purchase-order?restaurant_id={restaurant}", headers=auth_headers)
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "error" in data or "items" in data
+
+
+def test_staff_plan_no_forecast(client, auth_headers, restaurant):
+    resp = client.get(f"/operations/staff-plan?restaurant_id={restaurant}", headers=auth_headers)
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "days" in data
+
+
+def test_staff_plan_with_forecast(client, auth_headers, restaurant, db_session):
+    import uuid
+    from datetime import date, timedelta
+    from backend.db.models import Forecast
+    for i in range(1, 8):
+        fc = Forecast(
+            restaurant_id=restaurant,
+            date=date.today() + timedelta(days=i),
+            expected_covers=40 + i * 2,
+            product_predictions={"Pizza Margherita": 20},
+        )
+        db_session.add(fc)
+    db_session.commit()
+
+    resp = client.get(f"/operations/staff-plan?restaurant_id={restaurant}", headers=auth_headers)
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data["days"]) == 7
+    day = data["days"][0]
+    assert "shifts" in day
+    assert "lunch" in day["shifts"]
+    assert "dinner" in day["shifts"]
+
+
+def test_list_purchase_orders(client, auth_headers, restaurant):
+    resp = client.get(f"/operations/purchase-orders?restaurant_id={restaurant}", headers=auth_headers)
+    assert resp.status_code == 200
+    assert isinstance(resp.json(), list)
+
+
+# ── Phase 5: Restaurant PATCH ──────────────────────────────────────────────────
+
+def test_update_restaurant(client, auth_headers, restaurant):
+    resp = client.patch(
+        f"/restaurants/{restaurant}",
+        json={"city": "Milano", "category": "pizza"},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["city"] == "Milano"
+    assert data["category"] == "pizza"

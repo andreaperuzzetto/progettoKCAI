@@ -25,6 +25,10 @@ from backend.api.notifications import router as notifications_router
 from backend.api.alerts import router as alerts_router
 from backend.api.correlations import router as correlations_router
 from backend.api.integrations import router as integrations_router
+from backend.api.insights import router as insights_router
+from backend.api.menu import router as menu_router
+from backend.api.operations import router as operations_router
+from backend.api.organizations import router as organizations_router
 
 logger = logging.getLogger(__name__)
 
@@ -136,6 +140,10 @@ app.include_router(notifications_router)
 app.include_router(alerts_router)
 app.include_router(correlations_router)
 app.include_router(integrations_router)
+app.include_router(insights_router)
+app.include_router(menu_router)
+app.include_router(operations_router)
+app.include_router(organizations_router)
 
 
 def _run_alert_generation():

@@ -45,10 +45,16 @@ export default function Nav() {
     }
   }
 
+  const canMenu = plan === "pro" || isPremium;
   const links = [
     { href: "/", label: "Dashboard" },
+    { href: "/insights", label: "Insights" },
+    ...(canMenu ? [{ href: "/menu", label: "Menu" }] : []),
+    ...(isPremium ? [
+      { href: "/operations", label: "Operazioni" },
+      { href: "/integrations", label: "Integrazioni" },
+    ] : []),
     { href: "/setup", label: "Configura" },
-    ...(isPremium ? [{ href: "/integrations", label: "Integrazioni" }] : []),
     { href: "/billing", label: plan === "starter" ? "Piano ↑" : "Piano" },
   ];
 

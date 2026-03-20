@@ -234,3 +234,122 @@ export async function syncIntegration(restaurantId: string, integrationId: strin
   if (!res.ok) { const e = await res.json(); throw new Error(e.detail ?? "Sync fallito"); }
   return res.json();
 }
+
+// ── Menu Optimization ─────────────────────────────────────────────────────────
+export interface ProductMetric {
+  product: string;
+  total_quantity: number;
+  total_revenue: number;
+  avg_daily_quantity: number;
+  popularity_score: number;
+  revenue_score: number;
+}
+export interface MenuSuggestion {
+  product: string;
+  action: "promote" | "optimize_price" | "reposition" | "remove" | "monitor";
+  reason: string;
+  priority: "high" | "medium" | "low";
+}
+export async function analyzeMenu(restaurantId: string): Promise<{ suggestions: MenuSuggestion[] }> {
+  const res = await fetch(`${API_BASE}/menu/analyze?restaurant_id=${restaurantId}`, {
+    method: "POST", headers: authHeaders(),
+  });
+  if (!res.ok) { const e = await res.json(); throw new Error(e.detail ?? "Analisi menu fallita"); }
+  return res.json();
+}
+export async function fetchMenuMetrics(restaurantId: string): Promise<{ metrics: ProductMetric[] }> {
+  const res = await fetch(`${API_BASE}/menu/metrics?restaurant_id=${restaurantId}`, { headers: authHeaders() });
+  if (!res.ok) throw new Error("Impossibile caricare metriche menu");
+  return res.json();
+}
+
+// ── Operations ────────────────────────────────────────────────────────────────
+export interface PurchaseOrderItem {
+  ingredient: string;
+  quantity: number;
+  unit: string;
+  suggested_supplier?: string;
+}
+export interface StaffShift {
+  date: string;
+  day_of_week: string;
+  expected_covers: number;
+  recommended_staff: number;
+  shift_notes: string;
+}
+export async function generatePurchaseOrder(restaurantId: string): Promise<{ items: PurchaseOrderItem[]; generated_at: string }> {
+  const res = await fetch(`${API_BASE}/operations/purchase-order?restaurant_id=${restaurantId}`, {
+    method: "POST", headers: authHeaders(),
+  });
+  if (!res.ok) { const e = await res.json(); throw new Error(e.detail ?? "Errore ordine acquisti"); }
+  return res.json();
+}
+export async function fetchStaffPlan(restaurantId: string): Promise<{ shifts: StaffShift[] }> {
+  const res = await fetch(`${API_BASE}/operations/staff-plan?restaurant_id=${restaurantId}`, { headers: authHeaders() });
+  if (!res.ok) throw new Error("Impossibile caricare piano staff");
+  return res.json();
+}
+
+// ── Insights ──────────────────────────────────────────────────────────────────
+export interface InsightItem {
+  id: string;
+  type: string;
+  message: string;
+  confidence: number;
+  impact: number;
+  read_at?: string;
+  created_at: string;
+}
+export async function generateInsights(restaurantId: string): Promise<{ insights: InsightItem[] }> {
+  const res = await fetch(`${API_BASE}/insights/generate?restaurant_id=${restaurantId}`, {
+    method: "POST", headers: authHeaders(),
+  });
+  if (!res.ok) { const e = await res.json(); throw new Error(e.detail ?? "Errore generazione insights"); }
+  return res.json();
+}
+export async function fetchLatestInsights(restaurantId: string): Promise<{ insights: InsightItem[] }> {
+  const res = await fetch(`${API_BASE}/insights/latest?restaurant_id=${restaurantId}`, { headers: authHeaders() });
+  if (!res.ok) throw new Error("Impossibile caricare insights");
+  return res.json();
+}
+export async function markInsightRead(restaurantId: string, insightId: string) {
+  const res = await fetch(`${API_BASE}/insights/${insightId}/read?restaurant_id=${restaurantId}`, {
+    method: "POST", headers: authHeaders(),
+  });
+  if (!res.ok) throw new Error("Errore");
+  return res.json();
+}
+
+// ── Organizations ─────────────────────────────────────────────────────────────
+export interface OrgRestaurant { id: string; name: string; city?: string; category?: string }
+export interface OrgContext { id: string; name: string; role: string; restaurants: OrgRestaurant[] }
+export async function fetchMyOrg(): Promise<OrgContext | null> {
+  const res = await fetch(`${API_BASE}/organizations/me`, { headers: authHeaders() });
+  if (!res.ok) return null;
+  return res.json();
+}
+export async function createOrganization(name: string): Promise<OrgContext> {
+  const res = await fetch(`${API_BASE}/organizations`, {
+    method: "POST",
+    headers: { ...authHeaders(), "Content-Type": "application/json" },
+    body: JSON.stringify({ name }),
+  });
+  if (!res.ok) { const e = await res.json(); throw new Error(e.detail ?? "Errore"); }
+  return res.json();
+}
+export async function compareLocations(orgId: string): Promise<{ comparison: unknown }> {
+  const res = await fetch(`${API_BASE}/organizations/compare?org_id=${orgId}`, { headers: authHeaders() });
+  if (!res.ok) throw new Error("Impossibile confrontare sedi");
+  return res.json();
+}
+
+// ── Restaurant metadata ───────────────────────────────────────────────────────
+export async function updateRestaurant(restaurantId: string, data: { city?: string; category?: string }) {
+  const res = await fetch(`${API_BASE}/restaurants/${restaurantId}`, {
+    method: "PATCH",
+    headers: { ...authHeaders(), "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) { const e = await res.json(); throw new Error(e.detail ?? "Errore aggiornamento"); }
+  return res.json();
+}

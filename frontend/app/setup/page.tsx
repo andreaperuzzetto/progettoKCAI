@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { useAuth } from "../lib/auth-context";
-import { authHeaders } from "../lib/api";
+import { authHeaders, updateRestaurant } from "../lib/api";
 
 const API_BASE = "http://localhost:8000";
 
@@ -18,6 +18,9 @@ export default function SetupPage() {
   const [newProduct, setNewProduct] = useState({ name: "", category: "" });
   const [newIngredient, setNewIngredient] = useState({ name: "", unit: "" });
   const [msg, setMsg] = useState("");
+  const [restaurantCity, setRestaurantCity] = useState("");
+  const [restaurantCategory, setRestaurantCategory] = useState("");
+  const [savingMeta, setSavingMeta] = useState(false);
 
   const loadData = useCallback(async () => {
     if (!rid) return;
@@ -55,14 +58,70 @@ export default function SetupPage() {
     loadData();
   }
 
+  async function saveRestaurantMeta() {
+    if (!rid) return;
+    setSavingMeta(true);
+    try {
+      await updateRestaurant(rid, {
+        city: restaurantCity.trim() || undefined,
+        category: restaurantCategory.trim() || undefined,
+      });
+      setMsg("✅ Ristorante aggiornato");
+    } catch (e: unknown) {
+      setMsg(e instanceof Error ? e.message : "Errore");
+    } finally {
+      setSavingMeta(false);
+    }
+  }
+
   if (!rid) return <p className="text-gray-500 text-center py-20">Seleziona un ristorante</p>;
 
   return (
     <div className="max-w-2xl">
       <h1 className="text-2xl font-bold text-gray-900 mb-1">Configurazione</h1>
-      <p className="text-sm text-gray-500 mb-8">Mappa prodotti e ingredienti per attivare i suggerimenti automatici sulle forniture.</p>
+      <p className="text-sm text-gray-500 mb-8">Configura il tuo ristorante e mappa prodotti e ingredienti.</p>
 
       {msg && <p className="text-sm bg-green-50 text-green-700 px-3 py-2 rounded-lg mb-4">{msg}</p>}
+
+      {/* Restaurant metadata */}
+      <div className="bg-white border border-gray-200 rounded-xl p-5 mb-8">
+        <h2 className="font-semibold text-gray-800 mb-4">🏠 Dettagli ristorante</h2>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <div>
+            <label className="text-xs text-gray-500 block mb-1">Città</label>
+            <input
+              value={restaurantCity}
+              onChange={(e) => setRestaurantCity(e.target.value)}
+              placeholder="es. Milano"
+              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-900"
+            />
+          </div>
+          <div>
+            <label className="text-xs text-gray-500 block mb-1">Categoria</label>
+            <select
+              value={restaurantCategory}
+              onChange={(e) => setRestaurantCategory(e.target.value)}
+              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-900 bg-white"
+            >
+              <option value="">Seleziona…</option>
+              <option value="pizza">Pizzeria</option>
+              <option value="fine_dining">Fine Dining</option>
+              <option value="trattoria">Trattoria</option>
+              <option value="burger">Hamburgeria</option>
+              <option value="sushi">Sushi</option>
+              <option value="cafe">Caffetteria</option>
+              <option value="other">Altro</option>
+            </select>
+          </div>
+        </div>
+        <button
+          onClick={saveRestaurantMeta}
+          disabled={savingMeta}
+          className="mt-3 text-sm bg-gray-900 text-white px-4 py-2 rounded-xl hover:bg-gray-700 disabled:opacity-50 transition-colors"
+        >
+          {savingMeta ? "Salvataggio…" : "Salva"}
+        </button>
+      </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
         <div>
