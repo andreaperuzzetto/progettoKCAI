@@ -1,0 +1,213 @@
+# Deployment Guide — Restaurant Intelligence Platform
+
+## Prerequisites
+
+| Tool | Version |
+|------|---------|
+| Python | ≥ 3.11 |
+| Node.js | ≥ 18 |
+| PostgreSQL | ≥ 14 |
+| npm | ≥ 9 |
+
+---
+
+## Local Development Setup
+
+### 1. Clone the repository
+
+```bash
+git clone <repository-url>
+cd progettoKCAI
+```
+
+### 2. Backend Setup
+
+```bash
+# Create and activate virtual environment
+python -m venv .venv
+source .venv/bin/activate   # macOS/Linux
+# .venv\Scripts\activate     # Windows
+
+# Install dependencies
+pip install -r backend/requirements.txt
+```
+
+**Create `.env` file in the project root:**
+
+```bash
+cp .env.example .env
+# then edit .env with your values
+```
+
+```env
+# Required — local PostgreSQL
+DATABASE_URL=postgresql://user:password@localhost:5432/kcai
+SECRET_KEY=your-secret-key-min-32-chars
+
+# Required — Supabase (alternative to local PostgreSQL)
+# DATABASE_URL=postgresql://postgres.[ref]:[password]@aws-0-[region].pooler.supabase.com:5432/postgres
+# SECRET_KEY=your-secret-key-min-32-chars
+
+# Optional: enables LLM features
+OPENAI_API_KEY=sk-...
+
+# Optional: enables billing
+STRIPE_SECRET_KEY=sk_test_...
+STRIPE_WEBHOOK_SECRET=whsec_...
+STRIPE_PRICE_ID_STARTER=price_...
+STRIPE_PRICE_ID_PRO=price_...
+STRIPE_PRICE_ID_PREMIUM=price_...
+
+# Optional: enables daily email briefings
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_USER=your@email.com
+SMTP_PASSWORD=your-app-password
+SMTP_FROM=noreply@yourdomain.com
+```
+
+**Create the database:**
+
+```bash
+# Local PostgreSQL only — skip this step if using Supabase
+createdb kcai
+```
+
+**Start the backend:**
+
+```bash
+uvicorn backend.main:app --reload
+```
+
+The API will be available at `http://localhost:8000`.  
+Interactive docs: `http://localhost:8000/docs`
+
+---
+
+### 3. Frontend Setup
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+The frontend will be available at `http://localhost:3000`.
+
+**Optional: set custom API URL**
+
+```bash
+# frontend/.env.local
+NEXT_PUBLIC_API_URL=http://localhost:8000
+```
+
+---
+
+## Running Tests
+
+```bash
+# From project root with venv activated
+pytest backend/tests/ -v
+```
+
+---
+
+## Production Deployment
+
+### Backend
+
+```bash
+# Install production dependencies
+pip install -r backend/requirements.txt
+
+# Run with multiple workers
+uvicorn backend.main:app --host 0.0.0.0 --port 8000 --workers 4
+```
+
+**Key production changes needed:**
+- Set `SECRET_KEY` to a strong random value (≥ 32 chars)
+- Set `DATABASE_URL` to production PostgreSQL instance
+- Configure CORS in `main.py` to allow your production frontend domain
+- Use a process manager (e.g., `gunicorn`, `supervisor`) for reliability
+- Set up SSL/TLS termination (nginx recommended)
+
+### Frontend
+
+```bash
+cd frontend
+npm run build
+npm start
+# Or: serve the `out/` folder with any static host
+```
+
+**Recommended hosting:** Vercel (zero-config Next.js deployment)
+
+---
+
+## Docker (Optional)
+
+A `docker-compose.yml` can be added with:
+- `postgres:16` service
+- `backend` service (Python + uvicorn)
+- `frontend` service (Node + Next.js)
+
+---
+
+## Database Migrations
+
+Tables are created automatically on startup via SQLAlchemy:
+```python
+Base.metadata.create_all(bind=engine)
+```
+
+For schema changes after initial deployment, apply the migration files manually:
+
+```bash
+psql -d kcai -f backend/migrations/001_add_saas_columns.sql
+psql -d kcai -f backend/migrations/002_phase5.sql
+```
+
+---
+
+## Environment Variables Reference
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `DATABASE_URL` | ✅ | `postgresql://pepe@localhost:5432/kcai` | PostgreSQL connection string |
+| `SECRET_KEY` | ✅ | `change-me-in-production` | JWT signing key |
+| `ALGORITHM` | ❌ | `HS256` | JWT algorithm |
+| `ACCESS_TOKEN_EXPIRE_MINUTES` | ❌ | `10080` (7 days) | Token expiry |
+| `OPENAI_API_KEY` | ❌ | `""` | Enables LLM features |
+| `STRIPE_SECRET_KEY` | ❌ | `""` | Enables billing |
+| `STRIPE_WEBHOOK_SECRET` | ❌ | `""` | Stripe webhook validation |
+| `STRIPE_PRICE_ID_STARTER` | ❌ | `""` | Stripe price ID for Starter plan |
+| `STRIPE_PRICE_ID_PRO` | ❌ | `""` | Stripe price ID for Pro plan |
+| `STRIPE_PRICE_ID_PREMIUM` | ❌ | `""` | Stripe price ID for Premium plan |
+| `SMTP_HOST` | ❌ | `""` | SMTP server hostname |
+| `SMTP_PORT` | ❌ | `587` | SMTP port |
+| `SMTP_USER` | ❌ | `""` | SMTP username |
+| `SMTP_PASSWORD` | ❌ | `""` | SMTP password |
+| `SMTP_FROM` | ❌ | `""` | Sender email address |
+
+---
+
+## Scheduled Jobs
+
+The APScheduler runs automatically when the backend starts. No additional cron setup needed.
+
+| Job | Schedule | Purpose |
+|-----|----------|---------|
+| Daily forecasts | 02:00 | Regenerate 7-day forecasts for all restaurants |
+| Daily email | 07:00 | Send briefing to active/trial users |
+| Alert check (morning) | 08:00 | Detect alert conditions |
+| Alert check (afternoon) | 16:00 | Detect alert conditions |
+| Integration sync | Every 1h | Sync external data sources |
+
+---
+
+## API Documentation
+
+Interactive API docs are auto-generated by FastAPI:
+- **Swagger UI:** `http://localhost:8000/docs`
+- **ReDoc:** `http://localhost:8000/redoc`
+- **OpenAPI JSON:** `http://localhost:8000/openapi.json`

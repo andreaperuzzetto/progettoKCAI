@@ -1,152 +1,309 @@
-# Data Model
+# Data Model — Restaurant Intelligence Platform
 
-This document defines the initial data structure
-for the Restaurant Intelligence Platform.
-
-The schema is intentionally simple for the MVP.
+All UUIDs are stored as `CHAR(32)` (compatible with PostgreSQL and SQLite).
+All timestamps use `DateTime` (UTC).
 
 ---
 
-# Entities
+## Entity Relationship Overview
 
-Restaurant  
-Sales  
-Reviews  
-Forecast  
-DailyReport
-
----
-
-# Restaurant
-
-Represents a single restaurant using the platform.
-
-Fields:
-
-id  
-name  
-location  
-created_at
+```
+Organization ──< User ──< Restaurant ──< Reviews
+                                     ──< Sales
+                                     ──< Products ──< ProductIngredients ──> Ingredients
+                                     ──< Forecasts
+                                     ──< AnalysisResults
+                                     ──< Alerts
+                                     ──< CorrelationResults
+                                     ──< Integrations
+                                     ──< Insights
+                                     ──< ProductMetrics
+                                     ──< PurchaseOrders
+                                     ──< MarketMetrics (by city/category)
+```
 
 ---
 
-# Sales
+## Tables
 
-Represents historical sales data.
+### `organizations`
+Multi-tenant grouping for restaurant chains.
 
-Fields:
-
-id: UUID  
-restaurant_id: UUID  
-date: DATE  
-product: TEXT  
-quantity: INTEGER
-
-Example:
-
-date: 2025-01-01  
-product: pizza  
-quantity: 45
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | UUID PK | Auto-generated |
+| `name` | VARCHAR(255) | Organization name |
+| `created_at` | DateTime | UTC |
 
 ---
 
-# Reviews
+### `users`
+Platform users. One user can own multiple restaurants.
 
-Represents customer reviews collected from platforms.
-
-Fields:
-
-id: UUID
-restaurant_id: UUID
-date: DATE
-platform: TEXT
-review_text: TEXT
-sentiment: TEXT
-
-Sentiment values:
-
-positive  
-neutral  
-negative
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | UUID PK | |
+| `email` | VARCHAR(255) UNIQUE | |
+| `password_hash` | VARCHAR(255) | bcrypt |
+| `subscription_status` | VARCHAR(20) | `trial` \| `active` \| `inactive` |
+| `plan` | VARCHAR(20) | `starter` \| `pro` \| `premium` |
+| `trial_ends_at` | DateTime | Null after conversion |
+| `organization_id` | UUID FK → organizations | Optional |
+| `role` | VARCHAR(20) | `admin` (default) |
+| `created_at` | DateTime | |
 
 ---
 
-# Forecast
+### `restaurants`
+A restaurant is the primary entity. All data is scoped to a restaurant.
 
-Stores predicted sales for the next day.
-
-Fields:
-
-id  
-restaurant_id  
-date  
-product  
-predicted_quantity
-
-Example:
-
-date: 2025-02-01  
-product: pizza  
-predicted_quantity: 52
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | UUID PK | |
+| `name` | VARCHAR(255) | |
+| `owner_user_id` | UUID FK → users | Required |
+| `organization_id` | UUID FK → organizations | Optional |
+| `city` | VARCHAR(100) | For market benchmarking |
+| `category` | VARCHAR(100) | e.g., "pizzeria", "trattoria" |
+| `created_at` | DateTime | |
 
 ---
 
-# DailyReport
+### `reviews`
+Customer review entries. Imported via CSV or text upload.
 
-Stores the generated daily operational report.
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | UUID PK | |
+| `restaurant_id` | UUID FK → restaurants | |
+| `review_text` | TEXT | Full review content |
+| `rating` | INTEGER | 1–5, nullable |
+| `date` | DATE | Review date |
+| `platform` | TEXT | `google` \| `tripadvisor` \| etc. |
+| `created_at` | DateTime | Import timestamp |
 
-Fields:
-
-id  
-restaurant_id  
-date  
-forecast_summary  
-issues  
-suggestions
-
-Example:
-
-issues:
-- slow service weekend
-
-suggestions:
-- add one waiter Saturday evening.
+**CSV import format:**
+```csv
+date,platform,review_text,rating
+2025-01-01,google,"Great pizza!",5
+```
 
 ---
 
-# Relationships
+### `analysis_results`
+Output of sentiment analysis and topic extraction runs.
 
-Restaurant
-
-↓  
-
-Sales  
-Reviews  
-Forecast  
-DailyReport
-
-Each dataset is linked through restaurant_id.
-
----
-
-# MVP Simplifications
-
-For the MVP:
-
-- products are stored as simple text
-- menu categories are not required
-- ingredient tracking is not included.
-
-These features may be added later.
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | UUID PK | |
+| `restaurant_id` | UUID FK | |
+| `period` | VARCHAR(50) | `all` \| `last_30_days` |
+| `sentiment_positive` | FLOAT | Percentage 0–100 |
+| `sentiment_negative` | FLOAT | Percentage 0–100 |
+| `issues` | JSON | `[{name, frequency}]` |
+| `strengths` | JSON | `[{name, frequency}]` |
+| `suggestions` | JSON | `[{problem, action}]` |
+| `created_at` | DateTime | |
 
 ---
 
-# Future Extensions
+### `sales`
+Daily sales records. Imported via CSV.
 
-Possible future tables:
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | UUID PK | |
+| `restaurant_id` | UUID FK | |
+| `date` | DATE | Sales date |
+| `product_name` | VARCHAR(255) | Product identifier |
+| `quantity` | INTEGER | Units sold |
+| `revenue` | NUMERIC(10,2) | Optional |
+| `created_at` | DateTime | |
 
-MenuItems  
-Ingredients  
-KitchenMetrics  
-Staffing  
-Suppliers
+**CSV import format:**
+```csv
+date,product,quantity
+2025-01-01,pizza,45
+2025-01-01,pasta,30
+```
+
+---
+
+### `products`
+Menu products catalog.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | UUID PK | |
+| `restaurant_id` | UUID FK | |
+| `name` | VARCHAR(255) | |
+| `category` | VARCHAR(100) | Optional |
+| `created_at` | DateTime | |
+
+---
+
+### `ingredients`
+Ingredient inventory items.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | UUID PK | |
+| `restaurant_id` | UUID FK | |
+| `name` | VARCHAR(255) | |
+| `unit` | VARCHAR(50) | e.g., `kg`, `L`, `pz` |
+| `created_at` | DateTime | |
+
+---
+
+### `product_ingredients`
+Many-to-many mapping between products and ingredients.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | UUID PK | |
+| `product_id` | UUID FK → products | |
+| `ingredient_id` | UUID FK → ingredients | |
+| `quantity_per_unit` | FLOAT | Amount of ingredient per 1 unit sold |
+
+---
+
+### `forecasts`
+7-day demand forecasts generated by the forecasting engine.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | UUID PK | |
+| `restaurant_id` | UUID FK | |
+| `date` | DATE | Forecast target date |
+| `expected_covers` | INTEGER | Total covers predicted |
+| `product_predictions` | JSON | `{"pizza": 42, "pasta": 28}` |
+| `created_at` | DateTime | Generation timestamp |
+
+---
+
+### `alerts`
+Operational alerts generated by the alert engine.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | UUID PK | |
+| `restaurant_id` | UUID FK | |
+| `type` | VARCHAR(50) | `high_demand` \| `negative_spike` \| `sales_drop` \| `low_sentiment` \| `issue_increase` |
+| `severity` | VARCHAR(20) | `high` \| `medium` \| `low` |
+| `message` | TEXT | Human-readable alert message (Italian) |
+| `created_at` | DateTime | |
+| `read_at` | DateTime | Null if unread |
+
+---
+
+### `correlation_results`
+Output of correlation/causal analysis runs.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | UUID PK | |
+| `restaurant_id` | UUID FK | |
+| `correlations` | JSON | `[{cause, confidence, suggestion, impact_level}]` |
+| `created_at` | DateTime | |
+
+---
+
+### `integrations`
+Third-party data source integrations.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | UUID PK | |
+| `restaurant_id` | UUID FK | |
+| `provider` | VARCHAR(50) | e.g., `google_sheets`, `tripadvisor` |
+| `config_json` | JSON | Provider-specific config |
+| `status` | VARCHAR(20) | `pending` \| `active` \| `error` |
+| `last_sync_at` | DateTime | Last successful sync |
+| `error_message` | TEXT | Last error, if any |
+| `created_at` | DateTime | |
+
+---
+
+### `insights`
+AI-generated proactive insights (predictive, diagnostic, prescriptive).
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | UUID PK | |
+| `restaurant_id` | UUID FK | |
+| `type` | VARCHAR(50) | `predictive` \| `diagnostic` \| `prescriptive` |
+| `message` | TEXT | Italian language insight text |
+| `confidence` | FLOAT | 0.0 – 1.0 |
+| `impact` | FLOAT | 0.0 – 1.0 |
+| `created_at` | DateTime | |
+| `read_at` | DateTime | Null if unread |
+
+---
+
+### `product_metrics`
+Computed product performance metrics (updated periodically).
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | UUID PK | |
+| `restaurant_id` | UUID FK | |
+| `product_name` | VARCHAR(255) | |
+| `total_quantity` | INTEGER | All-time units sold |
+| `total_revenue` | NUMERIC(10,2) | All-time revenue |
+| `avg_daily_qty` | FLOAT | Average daily units |
+| `trend_7d` | FLOAT | % change last 7 days vs previous 7 |
+| `popularity_score` | FLOAT | Normalized 0–1 |
+| `computed_at` | DateTime | Last computation timestamp |
+
+---
+
+### `purchase_orders`
+AI-generated ingredient purchase orders.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | UUID PK | |
+| `restaurant_id` | UUID FK | |
+| `for_date` | DATE | Target delivery date |
+| `items` | JSON | `[{ingredient, quantity, unit}]` |
+| `status` | VARCHAR(20) | `draft` \| `sent` \| `confirmed` |
+| `created_at` | DateTime | |
+
+---
+
+### `market_metrics`
+Aggregated market intelligence by city/category (for benchmarking).
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | UUID PK | |
+| `city` | VARCHAR(100) | |
+| `category` | VARCHAR(100) | Restaurant category |
+| `avg_sentiment_positive` | FLOAT | Market average positive sentiment |
+| `avg_rating` | FLOAT | Market average rating |
+| `top_issues` | JSON | Most common issues in the area |
+| `restaurant_count` | INTEGER | Sample size |
+| `computed_at` | DateTime | |
+
+---
+
+### `usage_logs`
+Audit log of user actions for analytics and quota tracking.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | UUID PK | |
+| `user_id` | UUID FK → users | |
+| `action` | VARCHAR(50) | e.g., `login`, `run_analysis`, `view_dashboard` |
+| `created_at` | DateTime | |
+
+---
+
+## Database Migrations
+
+| File | Description |
+|------|-------------|
+| `migrations/001_add_saas_columns.sql` | Added SaaS subscription columns to `users` |
+| `migrations/002_phase5.sql` | Added Phase 5 tables: insights, product_metrics, purchase_orders, market_metrics |
+
+Tables are auto-created on startup via `Base.metadata.create_all(bind=engine)`.

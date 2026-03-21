@@ -1,176 +1,123 @@
-# MVP Scope
+# MVP Scope — Restaurant Intelligence Platform
 
-The MVP should answer one simple question:
+## What the MVP Delivers
 
-"What should the restaurant prepare tomorrow?"
-
-The system should provide daily operational insight
-based on sales data and customer reviews.
+The MVP covers 5 core capabilities that form a complete decision cycle for restaurant operators:
 
 ---
 
-# Core Features
-
-## 1 Sales Data Upload
-
-Restaurants can upload a CSV file containing historical sales.
-
-Example structure:
-
-date,product,quantity
-2025-01-01,pizza,45
-2025-01-01,pasta,31
-2025-01-01,burger,12
-
-The system stores this data for analysis.
+### 1. Sales Data Upload & Summary
+**What:** Upload historical sales records via CSV.  
+**Format:** `date, product, quantity` (optional: `revenue`)  
+**Output:** Top products, daily totals, period summary.  
+**Why:** Sales data is the foundation for forecasting and operational planning.
 
 ---
 
-## 2 Customer Review Import
+### 2. Customer Reviews Import & Sentiment Analysis
+**What:** Upload reviews via CSV or paste text directly.  
+**Format:** `date, platform, review_text, rating`  
+**Output:**
+- Positive / negative sentiment percentage
+- Top complaint topics with frequency counts
+- Recurring strengths
+- Suggested corrective actions
 
-The system should accept reviews via:
-
-- CSV upload
-- manual input
-
-Example structure:
-
-date,platform,review
-
-The system will analyze:
-
-- sentiment
-- recurring topics
-- common complaints.
+**Why:** Reviews contain the "why" behind sales trends. Connecting them to operations is the platform's core differentiation.
 
 ---
 
-## 3 Sentiment Analysis
-
-Reviews should be classified into:
-
-- positive
-- neutral
-- negative
-
-The system should also detect recurring themes such as:
-
-- slow service
-- burnt food
-- long waiting times.
+### 3. Demand Forecasting (7-Day Horizon)
+**What:** AI-generated daily demand predictions for the next 7 days.  
+**Output:** Expected covers + per-product quantity predictions.  
+**Algorithm:** LinearRegression on day-of-week patterns + rolling averages. Weighted moving average fallback for sparse data.  
+**Why:** Every operational decision (staffing, purchasing) depends on knowing how busy tomorrow will be.
 
 ---
 
-## 4 Demand Forecast
+### 4. Daily Operational Report
+**What:** A single aggregated report combining all data sources.  
+**Output:**
+- Tomorrow's expected covers and top products
+- 7-day forecast overview
+- Prioritized operational suggestions (inventory, staffing, menu)
+- Review sentiment summary and top issues
+- Active alerts
 
-Using historical sales, the system should predict
-next-day demand for each product category.
-
-Example output:
-
-Pizza: 52  
-Pasta: 41  
-Burger: 18
-
-The model does not need to be highly sophisticated.
-
----
-
-## 5 Daily Operational Report
-
-The system should generate a simple report.
-
-Example:
-
-Forecast
-
-Pizza: 52  
-Pasta: 41
-
-Issues
-
-Slow service on weekends.
-
-Suggestions
-
-Add one waiter on Saturday evenings.
+**Delivery:** Available in the dashboard and sent by email every morning at 07:00.  
+**Why:** This is the single daily touchpoint. If an owner reads only one thing, it should be this.
 
 ---
 
-# User Flow
+### 5. Alerts & Correlations
+**What:** Proactive detection of 5 alert conditions + causal analysis.
 
-The MVP should follow this operational flow.
+**Alert types:**
+- High demand spike (tomorrow ≥ +30% vs average)
+- Negative review spike (+15 percentage points)
+- Sales drop (-30% over last 3 days)
+- Low overall sentiment (< 40% positive)
+- Recurring issue increase (frequency delta ≥ 2)
 
-User uploads sales data
+**Correlations:** Rule-based (and optionally LLM-based) mapping of review issues to operational suggestions, taking tomorrow's forecast into account.
 
-↓
-
-User uploads reviews
-
-↓
-
-System runs demand forecast
-
-↓
-
-System analyzes reviews
-
-↓
-
-System generates daily operational report
+**Why:** Owners can't monitor data constantly. The system monitors for them and surfaces only what requires action.
 
 ---
 
-# Data Retention
+## What Is In Scope
 
-For the MVP the system only needs to keep recent historical data.
-
-Sales data retention:
-
-Keep the last 12 months of sales data.
-
-Older data may be archived or ignored by forecasting models.
-
-Reason:
-
-- restaurants change menus frequently
-- older data may become irrelevant
-- limiting the dataset simplifies forecasting models.
-
----
-
-# User Interface
-
-The MVP UI should be simple.
-
-Main sections:
-
-Today  
-Problems  
-Opportunities
+| Feature | Included |
+|---------|---------|
+| User registration + JWT authentication | ✅ |
+| Restaurant creation (per user) | ✅ |
+| Sales CSV import | ✅ |
+| Reviews CSV + text import | ✅ |
+| Sentiment analysis (keyword-based) | ✅ |
+| 7-day demand forecast | ✅ |
+| Daily report (dashboard + email) | ✅ |
+| Alerts (5 types) | ✅ |
+| Rule-based correlations | ✅ |
+| LLM correlations (GPT-4o-mini, optional) | ✅ |
+| Menu optimization (2×2 matrix) | ✅ |
+| Purchase order generation | ✅ |
+| Staff planning | ✅ |
+| AI insights (top 3 daily) | ✅ |
+| Subscription plans (Starter / Pro / Premium) | ✅ |
+| Stripe billing integration | ✅ |
+| Multi-restaurant per user | ✅ |
+| Organizations (multi-user, chains) | ✅ |
+| Third-party integrations (Google Sheets, etc.) | ✅ |
 
 ---
 
-# What The MVP Should NOT Include
+## What Is NOT in the MVP Scope
 
-The MVP should NOT include:
-
-- POS integrations
-- real-time analytics
-- advanced machine learning
-- complex dashboards
-- automated purchasing systems.
-
-These may be explored later.
+| Feature | Reason |
+|---------|--------|
+| Mobile app | Web-first MVP; mobile in Phase 6 |
+| Real-time POS sync | Complex integration; manual CSV is sufficient for validation |
+| Advanced ML models (LSTM, Prophet) | LinearRegression is sufficient and explainable |
+| Customer-facing review response tool | Out of scope; focus is operational decisions |
+| Inventory stock tracking | Requires hardware integration; out of scope |
+| Supplier management | Separate product category |
+| Multi-language UI (non-Italian) | Italian-first for initial market |
 
 ---
 
-# MVP Success Criteria
+## Feature Flags by Plan
 
-The MVP is successful if it can:
+| Feature | Trial | Starter | Pro | Premium |
+|---------|-------|---------|-----|---------|
+| Basic analysis | ✅ | ✅ | ✅ | ✅ |
+| Forecasting | ✅ | ✅ | ✅ | ✅ |
+| Daily report | ✅ | ✅ | ✅ | ✅ |
+| Alerts | ✅ | ❌ | ✅ | ✅ |
+| LLM correlations | ✅ | ❌ | ✅ | ✅ |
+| Menu optimization | ✅ | ❌ | ✅ | ✅ |
+| Operations | ✅ | ❌ | ✅ | ✅ |
+| AI Insights | ✅ | ❌ | ✅ | ✅ |
+| Integrations | ✅ | ❌ | ❌ | ✅ |
+| Organizations | ✅ | ❌ | ❌ | ✅ |
 
-- process sales data
-- analyze reviews
-- generate useful operational suggestions.
-
-Accuracy is less important than **usefulness**.
+*Trial: all features for 7 days. After trial expires, account moves to `inactive` until subscription is activated.*
